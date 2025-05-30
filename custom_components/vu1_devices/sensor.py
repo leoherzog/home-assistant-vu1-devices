@@ -1,0 +1,177 @@
+"""Support for VU1 dial sensors."""
+import logging
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN, MANUFACTURER, MODEL
+from .vu1_api import VU1APIClient
+
+if TYPE_CHECKING:
+    from . import VU1DataUpdateCoordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up VU1 sensor entities."""
+    data = hass.data[DOMAIN][config_entry.entry_id]
+    coordinator = data["coordinator"]
+    client: VU1APIClient = data["client"]
+
+    entities = []
+    
+    # Create sensor entities for each dial
+    for dial_uid, dial_data in coordinator.data.items():
+        entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_data))
+
+    async_add_entities(entities)
+
+
+class VU1DialSensor(CoordinatorEntity, SensorEntity):
+    """Representation of a VU1 dial sensor."""
+
+    def __init__(
+        self,
+        coordinator,
+        client: VU1APIClient,
+        dial_uid: str,
+        dial_data: Dict[str, Any],
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._client = client
+        self._dial_uid = dial_uid
+        self._attr_unique_id = f"{DOMAIN}_{dial_uid}"
+        self._attr_name = dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
+        self._attr_has_entity_name = True
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information about this VU1 dial."""
+        dial_data = self.coordinator.data.get(self._dial_uid, {})
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._dial_uid)},
+            name=dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+            sw_version="1.0",
+            # Add via_device to link to the VU1 server hub
+            via_device=(DOMAIN, f"vu1_server_{self.coordinator.client.host}_{self.coordinator.client.port}"),
+        )
+
+    @property
+    def native_value(self) -> Optional[int]:
+        """Return the state of the sensor."""
+        dial_data = self.coordinator.data.get(self._dial_uid, {})
+        return dial_data.get("value")
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        """Return the unit of measurement."""
+        return "%"
+
+    @property
+    def device_class(self) -> Optional[SensorDeviceClass]:
+        """Return the device class."""
+        # Using generic device class since this is a dial/gauge
+        return None
+
+    @property
+    def state_class(self) -> Optional[SensorStateClass]:
+        """Return the state class."""
+        return SensorStateClass.MEASUREMENT
+
+    @property
+    def icon(self) -> str:
+        """Return the icon for the sensor."""
+        return "mdi:gauge"
+
+    @property
+    def should_poll(self) -> bool:
+        """No polling needed, we use coordinator."""
+        return False
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return additional state attributes."""
+        dial_data = self.coordinator.data.get(self._dial_uid, {})
+        
+        attributes = {
+            "dial_uid": self._dial_uid,
+            "dial_name": dial_data.get("dial_name"),
+        }
+
+        # Add backlight information
+        backlight = dial_data.get("backlight", {})
+        if backlight:
+            attributes.update({
+                "backlight_red": backlight.get("red"),
+                "backlight_green": backlight.get("green"),
+                "backlight_blue": backlight.get("blue"),
+            })
+
+        # Add image file information
+        if "image_file" in dial_data:
+            attributes["image_file"] = dial_data["image_file"]
+
+        # Add detailed status if available
+        detailed_status = dial_data.get("detailed_status", {})
+        if detailed_status:
+            attributes["detailed_status"] = detailed_status
+
+        return attributes
+
+    async def async_set_dial_value(self, value: int) -> None:
+        """Set the dial value."""
+        try:
+            await self._client.set_dial_value(self._dial_uid, value)
+            # Trigger coordinator refresh to update state
+            await self.coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to set dial value for %s: %s", self._dial_uid, err)
+
+    async def async_set_dial_backlight(self, red: int, green: int, blue: int) -> None:
+        """Set the dial backlight."""
+        try:
+            await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
+            # Trigger coordinator refresh to update state
+            await self.coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to set dial backlight for %s: %s", self._dial_uid, err)
+
+    async def async_set_dial_name(self, name: str) -> None:
+        """Set the dial name."""
+        try:
+            await self._client.set_dial_name(self._dial_uid, name)
+            # Trigger coordinator refresh to update state
+            await self.coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to set dial name for %s: %s", self._dial_uid, err)
+
+    async def async_reload_dial(self) -> None:
+        """Reload the dial configuration."""
+        try:
+            await self._client.reload_dial(self._dial_uid)
+            # Trigger coordinator refresh to update state
+            await self.coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to reload dial %s: %s", self._dial_uid, err)
+
+    async def async_calibrate_dial(self) -> None:
+        """Calibrate the dial."""
+        try:
+            await self._client.calibrate_dial(self._dial_uid)
+            # Trigger coordinator refresh to update state
+            await self.coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to calibrate dial %s: %s", self._dial_uid, err)
