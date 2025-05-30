@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up VU1 Devices",
+        "description": "Configure your VU1 server connection",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "api_key": "API Key"
+        }
+      },
+      "discovery": {
+        "title": "VU1 Server Discovered",
+        "description": "A VU1 server was discovered at {host}:{port}. Please enter your API key to continue.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "api_key": "API Key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to VU1 server",
+      "invalid_auth": "Invalid API key",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "VU1 server is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "VU1 Devices Options",
+        "description": "Configure update interval and other options",
+        "data": {
+          "update_interval": "Update interval (seconds)"
+        }
+      }
+    }
+  }
+}

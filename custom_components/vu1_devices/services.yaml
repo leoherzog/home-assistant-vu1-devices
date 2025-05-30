@@ -1,0 +1,106 @@
+set_dial_value:
+  name: Set Dial Value
+  description: Set the value of a VU1 dial (0-100%)
+  fields:
+    dial_uid:
+      name: Dial UID
+      description: The unique identifier of the dial
+      required: true
+      example: "590056000650564139323920"
+      selector:
+        text:
+    value:
+      name: Value
+      description: The value to set (0-100)
+      required: true
+      example: 75
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+
+set_dial_backlight:
+  name: Set Dial Backlight
+  description: Set the RGB backlight color of a VU1 dial
+  fields:
+    dial_uid:
+      name: Dial UID
+      description: The unique identifier of the dial
+      required: true
+      example: "590056000650564139323920"
+      selector:
+        text:
+    red:
+      name: Red
+      description: Red color component (0-100)
+      required: true
+      example: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    green:
+      name: Green
+      description: Green color component (0-100)
+      required: true
+      example: 25
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    blue:
+      name: Blue
+      description: Blue color component (0-100)
+      required: true
+      example: 75
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+
+set_dial_name:
+  name: Set Dial Name
+  description: Set the display name of a VU1 dial
+  fields:
+    dial_uid:
+      name: Dial UID
+      description: The unique identifier of the dial
+      required: true
+      example: "590056000650564139323920"
+      selector:
+        text:
+    name:
+      name: Name
+      description: The new name for the dial
+      required: true
+      example: "CPU Usage"
+      selector:
+        text:
+
+reload_dial:
+  name: Reload Dial
+  description: Reload the configuration of a VU1 dial
+  fields:
+    dial_uid:
+      name: Dial UID
+      description: The unique identifier of the dial
+      required: true
+      example: "590056000650564139323920"
+      selector:
+        text:
+
+calibrate_dial:
+  name: Calibrate Dial
+  description: Calibrate a VU1 dial
+  fields:
+    dial_uid:
+      name: Dial UID
+      description: The unique identifier of the dial
+      required: true
+      example: "590056000650564139323920"
+      selector:
+        text:

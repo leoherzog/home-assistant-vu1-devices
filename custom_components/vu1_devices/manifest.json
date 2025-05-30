@@ -1,0 +1,14 @@
+{
+  "domain": "vu1_devices",
+  "name": "Streacom VU1 Devices",
+  "version": "0.0.1",
+  "homeassistant": "2023.3.0",
+  "documentation": "https://github.com/leoherzog/home-assistant-vu1-devices",
+  "issue_tracker": "https://github.com/leoherzog/home-assistant-vu1-devices/issues",
+  "dependencies": [],
+  "codeowners": ["@leoherzog"],
+  "requirements": ["aiohttp>=3.8.0"],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "integration_type": "device"
+}
