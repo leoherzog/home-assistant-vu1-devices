@@ -131,21 +131,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-
+    
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
         await data["client"].close()
-
-    # Remove services if this is the last entry
-    if not hass.data[DOMAIN]:
-        for service in [
-            SERVICE_SET_DIAL_VALUE,
-            SERVICE_SET_DIAL_BACKLIGHT,
-            SERVICE_SET_DIAL_NAME,
-            SERVICE_RELOAD_DIAL,
-            SERVICE_CALIBRATE_DIAL,
-        ]:
-            hass.services.async_remove(DOMAIN, service)
+        
+        # Remove server device from registry
+        device_registry = dr.async_get(hass)
+        server_device_id = (DOMAIN, f"vu1_server_{entry.data[CONF_HOST]}_{entry.data[CONF_PORT]}")
+        device = device_registry.async_get_device(identifiers={server_device_id})
+        if device:
+            device_registry.async_remove_device(device.id)
+        
+        # Remove services if this is the last entry
+        if not hass.data[DOMAIN]:
+            for service in [SERVICE_SET_DIAL_VALUE, SERVICE_SET_DIAL_BACKLIGHT, 
+                          SERVICE_SET_DIAL_NAME, SERVICE_RELOAD_DIAL, SERVICE_CALIBRATE_DIAL]:
+                if hass.services.has_service(DOMAIN, service):
+                    hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
 
