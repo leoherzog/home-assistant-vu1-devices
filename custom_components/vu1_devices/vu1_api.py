@@ -65,6 +65,8 @@ class VU1APIClient:
 
         try:
             async with self.session.request(method, url, params=params) as response:
+                response.raise_for_status()  # Raises exception for 4xx/5xx status codes
+                
                 if response.content_type == "application/json":
                     data = await response.json()
                     
@@ -155,14 +157,16 @@ class VU1APIClient:
         return response.get("data", {})
 
 
-async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT) -> bool:
+async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT) -> Dict[str, Any]:
     """Discover VU1 server on given host and port."""
     client = VU1APIClient(host, port, "")
     try:
         # Try to connect without API key first
         async with client.session.get(f"http://{host}:{port}/dial/list") as response:
-            return response.status in [200, 401, 403]  # Server responding
+            if response.status in [200, 401, 403]:  # Server responding
+                return {"host": host, "port": port}
+            return {}
     except Exception:
-        return False
+        return {}
     finally:
         await client.close()
