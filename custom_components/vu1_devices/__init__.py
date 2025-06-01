@@ -158,12 +158,27 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         dial_uid = call.data[ATTR_DIAL_UID]
         value = call.data[ATTR_VALUE]
         
+        # Find the correct client for this dial
+        client = None
+        coordinator = None
+        for entry_id, data in hass.data[DOMAIN].items():
+            coord = data["coordinator"]
+            if coord.data and dial_uid in coord.data:
+                client = data["client"]
+                coordinator = coord
+                break
+        
+        if not client:
+            _LOGGER.error("Dial %s not found", dial_uid)
+            return
+        
         try:
             await client.set_dial_value(dial_uid, value)
+            # Refresh the coordinator that owns this dial
+            await coordinator.async_request_refresh()
             _LOGGER.debug("Successfully set dial %s value to %s", dial_uid, value)
         except VU1APIError as err:
             _LOGGER.error("Failed to set dial value for %s: %s", dial_uid, err)
-            raise
 
     async def set_dial_backlight(call: ServiceCall) -> None:
         """Set dial backlight service."""
@@ -172,38 +187,98 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         green = call.data[ATTR_GREEN]
         blue = call.data[ATTR_BLUE]
         
+        # Find the correct client for this dial
+        client = None
+        coordinator = None
+        for entry_id, data in hass.data[DOMAIN].items():
+            coord = data["coordinator"]
+            if coord.data and dial_uid in coord.data:
+                client = data["client"]
+                coordinator = coord
+                break
+        
+        if not client:
+            _LOGGER.error("Dial %s not found", dial_uid)
+            return
+        
         try:
             await client.set_dial_backlight(dial_uid, red, green, blue)
+            await coordinator.async_request_refresh()
         except VU1APIError as err:
-            _LOGGER.error("Failed to set dial backlight: %s", err)
+            _LOGGER.error("Failed to set dial backlight for %s: %s", dial_uid, err)
 
     async def set_dial_name(call: ServiceCall) -> None:
         """Set dial name service."""
         dial_uid = call.data[ATTR_DIAL_UID]
         name = call.data[ATTR_NAME]
         
+        # Find the correct client for this dial
+        client = None
+        coordinator = None
+        for entry_id, data in hass.data[DOMAIN].items():
+            coord = data["coordinator"]
+            if coord.data and dial_uid in coord.data:
+                client = data["client"]
+                coordinator = coord
+                break
+        
+        if not client:
+            _LOGGER.error("Dial %s not found", dial_uid)
+            return
+        
         try:
             await client.set_dial_name(dial_uid, name)
+            await coordinator.async_request_refresh()
         except VU1APIError as err:
-            _LOGGER.error("Failed to set dial name: %s", err)
+            _LOGGER.error("Failed to set dial name for %s: %s", dial_uid, err)
 
     async def reload_dial(call: ServiceCall) -> None:
         """Reload dial service."""
         dial_uid = call.data[ATTR_DIAL_UID]
         
+        # Find the correct client for this dial
+        client = None
+        coordinator = None
+        for entry_id, data in hass.data[DOMAIN].items():
+            coord = data["coordinator"]
+            if coord.data and dial_uid in coord.data:
+                client = data["client"]
+                coordinator = coord
+                break
+        
+        if not client:
+            _LOGGER.error("Dial %s not found", dial_uid)
+            return
+        
         try:
             await client.reload_dial(dial_uid)
+            await coordinator.async_request_refresh()
         except VU1APIError as err:
-            _LOGGER.error("Failed to reload dial: %s", err)
+            _LOGGER.error("Failed to reload dial for %s: %s", dial_uid, err)
 
     async def calibrate_dial(call: ServiceCall) -> None:
         """Calibrate dial service."""
         dial_uid = call.data[ATTR_DIAL_UID]
         
+        # Find the correct client for this dial
+        client = None
+        coordinator = None
+        for entry_id, data in hass.data[DOMAIN].items():
+            coord = data["coordinator"]
+            if coord.data and dial_uid in coord.data:
+                client = data["client"]
+                coordinator = coord
+                break
+        
+        if not client:
+            _LOGGER.error("Dial %s not found", dial_uid)
+            return
+        
         try:
             await client.calibrate_dial(dial_uid)
+            await coordinator.async_request_refresh()
         except VU1APIError as err:
-            _LOGGER.error("Failed to calibrate dial: %s", err)
+            _LOGGER.error("Failed to calibrate dial for %s: %s", dial_uid, err)
 
     # Register services
     hass.services.async_register(

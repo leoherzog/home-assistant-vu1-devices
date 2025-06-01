@@ -43,8 +43,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             discovered = await discover_vu1_server()
             if discovered:
-                self._discovered_host = "localhost"
-                self._discovered_port = 5340
+                # Use actual discovered host/port or defaults
+                self._discovered_host = discovered.get("host", "localhost")
+                self._discovered_port = discovered.get("port", 5340)
                 # Set unique ID to prevent duplicate configs
                 await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
                 self._abort_if_unique_id_configured()
