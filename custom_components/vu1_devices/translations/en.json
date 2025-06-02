@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Set up VU1 Devices",
-        "description": "Configure your VU1 server connection",
+        "description": "Configure your VU1 server connection. {discovery_info}",
         "data": {
           "host": "Host",
           "port": "Port",
@@ -12,7 +12,7 @@
       },
       "discovery": {
         "title": "VU1 Server Discovered",
-        "description": "A VU1 server was discovered at {host}:{port}. Please enter your API key to continue.",
+        "description": "{discovery_info} Please enter your API key to continue.",
         "data": {
           "host": "Host",
           "port": "Port",
@@ -33,9 +33,23 @@
     "step": {
       "init": {
         "title": "VU1 Devices Options",
-        "description": "Configure update interval and other options",
+        "description": "Configure update interval and dial settings",
         "data": {
-          "update_interval": "Update interval (seconds)"
+          "update_interval": "Update interval (seconds)",
+          "configure_dial": "Configure dial"
+        }
+      },
+      "configure_dial": {
+        "title": "Configure Dial",
+        "description": "Set up sensor binding and dial behavior for {dial_name}",
+        "data": {
+          "bound_entity": "Bind to sensor (optional)",
+          "value_min": "Minimum sensor value",
+          "value_max": "Maximum sensor value", 
+          "update_mode": "Update mode",
+          "backlight_red": "Backlight Red (0-100)",
+          "backlight_green": "Backlight Green (0-100)",
+          "backlight_blue": "Backlight Blue (0-100)"
         }
       }
     }
