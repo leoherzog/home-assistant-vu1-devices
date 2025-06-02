@@ -72,7 +72,14 @@ class VU1APIClient:
         if params is None:
             params = {}
             
-        # Add authentication - VU1 API key is used for both ingress and direct connections
+        # Handle ingress authentication differently
+        if self._use_ingress and self.supervisor_token:
+            # For ingress mode, add Supervisor token to headers instead of URL params
+            headers["Authorization"] = f"Bearer {self.supervisor_token}"
+            headers["X-Ingress-Path"] = f"/{endpoint}"
+            _LOGGER.debug("Using ingress mode with supervisor token")
+        
+        # Add VU1 API key authentication 
         if self.api_key:
             params["key"] = self.api_key
             _LOGGER.debug("Using API key: %s...", self.api_key[:8] if len(self.api_key) > 8 else "****")
