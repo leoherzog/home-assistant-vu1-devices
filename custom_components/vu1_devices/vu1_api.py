@@ -108,9 +108,11 @@ class VU1APIClient:
     async def test_connection(self) -> bool:
         """Test connection to VU1 server."""
         try:
+            _LOGGER.debug("Testing connection to: %s", self.base_url)
             await self.get_dial_list()
             return True
-        except VU1APIError:
+        except VU1APIError as err:
+            _LOGGER.debug("Connection test failed: %s", err)
             return False
 
     async def get_dial_list(self) -> List[Dict[str, Any]]:
@@ -276,12 +278,16 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
             )
             try:
                 # Test connection using the client's methods
+                _LOGGER.info("Testing ingress connection to %s:%s", 
+                           f"local-{addon_result['slug']}", addon_result.get("ingress_port", DEFAULT_PORT))
                 if await client.test_connection():
                     _LOGGER.info("VU1 Server discovered via ingress at %s:%s", 
                                f"local-{addon_result['slug']}", addon_result.get("ingress_port", DEFAULT_PORT))
                     return addon_result
+                else:
+                    _LOGGER.warning("VU1 Server add-on found but connection test failed")
             except Exception as err:
-                _LOGGER.debug("Ingress add-on discovered but not reachable: %s", err)
+                _LOGGER.warning("Ingress add-on discovered but not reachable: %s", err)
             finally:
                 await client.close()
         else:
