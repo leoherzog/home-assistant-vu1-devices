@@ -33,8 +33,6 @@ from .const import (
     ATTR_NAME,
 )
 from .vu1_api import VU1APIClient, VU1APIError
-from .device_config import async_get_config_manager
-from .sensor_binding import async_get_binding_manager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -130,10 +128,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     # Set up device configuration manager
+    from .device_config import async_get_config_manager
     config_manager = async_get_config_manager(hass)
     await config_manager.async_load()
     
     # Set up sensor binding manager
+    from .sensor_binding import async_get_binding_manager
     binding_manager = async_get_binding_manager(hass)
     await binding_manager.async_setup()
     
