@@ -33,6 +33,8 @@ from .const import (
     ATTR_NAME,
 )
 from .vu1_api import VU1APIClient, VU1APIError
+from .device_config import async_get_config_manager
+from .sensor_binding import async_get_binding_manager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,10 +73,18 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, err)
                     dial_data[dial_uid] = dial
 
+            # Update sensor bindings when data changes
+            if hasattr(self, '_binding_manager'):
+                await self._binding_manager.async_update_bindings(dial_data)
+
             return dial_data
 
         except VU1APIError as err:
             raise UpdateFailed(f"Error communicating with VU1 server: {err}") from err
+    
+    def set_binding_manager(self, binding_manager) -> None:
+        """Set the binding manager reference."""
+        self._binding_manager = binding_manager
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -119,11 +129,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
     }
 
+    # Set up device configuration manager
+    config_manager = async_get_config_manager(hass)
+    await config_manager.async_load()
+    
+    # Set up sensor binding manager
+    binding_manager = async_get_binding_manager(hass)
+    await binding_manager.async_setup()
+    
+    # Connect binding manager to coordinator
+    coordinator.set_binding_manager(binding_manager)
+    
+    # Add binding manager to data for coordinator access
+    hass.data[DOMAIN][entry.entry_id]["binding_manager"] = binding_manager
+    
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Register services
     await async_setup_services(hass, client)
+    
+    # Initial binding update
+    if coordinator.data:
+        await binding_manager.async_update_bindings(coordinator.data)
 
     return True
 
@@ -135,6 +163,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
         await data["client"].close()
+        
+        # Shutdown binding manager for this entry
+        binding_manager = data.get("binding_manager")
+        if binding_manager:
+            await binding_manager.async_shutdown()
         
         # Remove server device from registry
         device_registry = dr.async_get(hass)
