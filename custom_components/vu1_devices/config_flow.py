@@ -179,15 +179,15 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
     )
 
     try:
-        # Test the connection
-        if not await client.test_connection():
-            raise CannotConnect
-
-        # Get dial list to verify API key works
+        _LOGGER.debug("Testing connection to VU1 server at %s:%s", data["host"], data["port"])
+        
+        # Test the connection by getting dial list
         dials = await client.get_dial_list()
+        _LOGGER.debug("Successfully connected to VU1 server, found %d dials", len(dials))
         
     except VU1APIError as err:
-        if "auth" in str(err).lower() or "key" in str(err).lower():
+        _LOGGER.error("VU1 API error during validation: %s", err)
+        if "auth" in str(err).lower() or "key" in str(err).lower() or "forbidden" in str(err).lower():
             raise InvalidAuth from err
         raise CannotConnect from err
     finally:

@@ -78,7 +78,14 @@ class VU1APIClient:
                     # Handle binary responses (like images)
                     return {"data": await response.read()}
                     
-        except ClientError as err:
+        except aiohttp.ClientResponseError as err:
+            if err.status == 401:
+                raise VU1APIError(f"Authentication failed: Invalid API key") from err
+            elif err.status == 403:
+                raise VU1APIError(f"Access forbidden: Invalid API key") from err
+            else:
+                raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
+        except (ClientError, asyncio.TimeoutError) as err:
             raise VU1APIError(f"Connection error: {err}") from err
 
     async def test_connection(self) -> bool:
@@ -161,11 +168,13 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
     """Discover VU1 server on given host and port."""
     client = VU1APIClient(host, port, "")
     try:
-        # Try to connect without API key first
+        # Try to connect without API key first - just check if server is running
         async with client.session.get(f"http://{host}:{port}/dial/list") as response:
-            if response.status in [200, 401, 403]:  # Server responding
+            if response.status in [200, 401, 403]:  # Server responding (401/403 expected without key)
                 return {"host": host, "port": port}
             return {}
+    except (ClientError, asyncio.TimeoutError):
+        return {}
     except Exception:
         return {}
     finally:
