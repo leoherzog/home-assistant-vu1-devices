@@ -202,9 +202,15 @@ async def discover_vu1_addon() -> Dict[str, Any]:
                 data = await response.json()
                 addons = data.get("data", {}).get("addons", [])
                 
-                # Look for VU1 Server add-on
+                _LOGGER.debug("Found %d add-ons via Supervisor API", len(addons))
                 for addon in addons:
-                    if addon.get("slug") == "vu-server-addon":
+                    _LOGGER.debug("Add-on: %s (state: %s)", addon.get("slug"), addon.get("state"))
+                
+                # Look for VU1 Server add-on (handle different repository prefixes)
+                for addon in addons:
+                    addon_slug = addon.get("slug", "")
+                    if "vu-server-addon" in addon_slug:
+                        _LOGGER.debug("Found VU1 Server add-on: %s (state: %s)", addon_slug, addon.get("state"))
                         if addon.get("state") == "started":
                             # Found running VU1 Server add-on
                             slug = addon.get("slug", "vu-server-addon")
