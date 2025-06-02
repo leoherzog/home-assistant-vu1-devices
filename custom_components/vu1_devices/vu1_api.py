@@ -226,11 +226,15 @@ async def discover_vu1_addon() -> Dict[str, Any]:
                                     # Check if ingress is enabled
                                     if addon_data.get("ingress"):
                                         ingress_port = addon_data.get("ingress_port", DEFAULT_PORT)
-                                        _LOGGER.debug("Found VU1 Server add-on with ingress enabled on port %s", ingress_port)
+                                        # Get the actual IP address from addon info
+                                        addon_ip = addon_data.get("ip_address")
+                                        _LOGGER.debug("Found VU1 Server add-on with ingress enabled on port %s, IP: %s", ingress_port, addon_ip)
+                                        _LOGGER.debug("Full addon data: %s", addon_data)
                                         return {
                                             "slug": slug,
                                             "ingress": True,
                                             "ingress_port": ingress_port,
+                                            "addon_ip": addon_ip,
                                             "addon_discovered": True,
                                             "supervisor_token": supervisor_token
                                         }
@@ -269,27 +273,35 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
     if addon_result:
         _LOGGER.info("Add-on discovery returned: %s", addon_result)
         if addon_result.get("ingress"):
-            # Test ingress connection using internal Docker hostname
-            client = VU1APIClient(
-                ingress_slug=addon_result["slug"],
-                supervisor_token=addon_result["supervisor_token"],
-                port=addon_result.get("ingress_port", DEFAULT_PORT),
-                api_key=""  # Test without API key first
-            )
-            try:
-                # Test connection using the client's methods
-                _LOGGER.info("Testing ingress connection to %s:%s", 
-                           f"local-{addon_result['slug']}", addon_result.get("ingress_port", DEFAULT_PORT))
-                if await client.test_connection():
-                    _LOGGER.info("VU1 Server discovered via ingress at %s:%s", 
-                               f"local-{addon_result['slug']}", addon_result.get("ingress_port", DEFAULT_PORT))
-                    return addon_result
-                else:
-                    _LOGGER.warning("VU1 Server add-on found but connection test failed")
-            except Exception as err:
-                _LOGGER.warning("Ingress add-on discovered but not reachable: %s", err)
-            finally:
-                await client.close()
+            # Test ingress connection using actual IP address
+            addon_ip = addon_result.get("addon_ip")
+            if addon_ip:
+                client = VU1APIClient(
+                    host=addon_ip,
+                    port=addon_result.get("ingress_port", DEFAULT_PORT),
+                    ingress_slug=addon_result["slug"],
+                    supervisor_token=addon_result["supervisor_token"],
+                    api_key=""  # Test without API key first
+                )
+                try:
+                    # Test connection using the client's methods
+                    _LOGGER.info("Testing ingress connection to %s:%s", 
+                               addon_ip, addon_result.get("ingress_port", DEFAULT_PORT))
+                    if await client.test_connection():
+                        _LOGGER.info("VU1 Server discovered via ingress at %s:%s", 
+                                   addon_ip, addon_result.get("ingress_port", DEFAULT_PORT))
+                        # Update the result to use IP instead of hostname
+                        addon_result["host"] = addon_ip
+                        addon_result["port"] = addon_result.get("ingress_port", DEFAULT_PORT)
+                        return addon_result
+                    else:
+                        _LOGGER.warning("VU1 Server add-on found but connection test failed")
+                except Exception as err:
+                    _LOGGER.warning("Ingress add-on discovered but not reachable: %s", err)
+                finally:
+                    await client.close()
+            else:
+                _LOGGER.warning("No IP address found for ingress add-on")
         else:
             # Test direct connection via hostname
             client = VU1APIClient(addon_result["host"], addon_result["port"], "")
