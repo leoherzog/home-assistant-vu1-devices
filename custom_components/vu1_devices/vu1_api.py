@@ -73,10 +73,14 @@ class VU1APIClient:
             params = {}
             
         # Add authentication - VU1 API key is used for both ingress and direct connections
-        params["key"] = self.api_key
+        if self.api_key:
+            params["key"] = self.api_key
+            _LOGGER.debug("Using API key: %s...", self.api_key[:8] if len(self.api_key) > 8 else "****")
 
         try:
+            _LOGGER.debug("Making request: %s %s with params: %s", method, url, {k: v if k != "key" else f"{v[:8]}..." for k, v in params.items()})
             async with self.session.request(method, url, params=params, headers=headers) as response:
+                _LOGGER.debug("Response status: %s", response.status)
                 response.raise_for_status()  # Raises exception for 4xx/5xx status codes
                 
                 if response.content_type == "application/json":
