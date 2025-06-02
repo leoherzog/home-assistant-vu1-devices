@@ -104,9 +104,21 @@ class VU1APIClient:
         """Test connection to VU1 server."""
         try:
             _LOGGER.debug("Testing connection to: %s", self.base_url)
-            await self.get_dial_list()
-            return True
-        except VU1APIError as err:
+            
+            # Make a direct HTTP request to test connectivity
+            url = f"{self.base_url}/api/v0/dial/list"
+            params = {"key": self.api_key} if self.api_key else {}
+            
+            async with self.session.get(url, params=params) as response:
+                # Server is reachable if we get any HTTP response
+                if response.status in [200, 401, 403]:
+                    _LOGGER.debug("Server is reachable (HTTP %s)", response.status)
+                    return True
+                else:
+                    _LOGGER.debug("Server returned unexpected status: %s", response.status)
+                    return False
+                    
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.debug("Connection test failed: %s", err)
             return False
 
