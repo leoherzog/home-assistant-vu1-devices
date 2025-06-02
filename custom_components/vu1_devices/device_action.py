@@ -22,7 +22,6 @@ from .const import (
     DEFAULT_VALUE_MAX,
     DEFAULT_BACKLIGHT_COLOR,
 )
-from .device_config import async_get_config_manager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,6 +149,7 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
         dial_config[CONF_UPDATE_MODE] = config[CONF_UPDATE_MODE]
     
     # Update configuration
+    from .device_config import async_get_config_manager
     config_manager = async_get_config_manager(hass)
     await config_manager.async_update_dial_config(dial_uid, dial_config)
     

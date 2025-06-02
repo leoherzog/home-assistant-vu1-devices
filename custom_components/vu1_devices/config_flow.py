@@ -11,7 +11,6 @@ import homeassistant.helpers.config_validation as cv
 
 from .const import DOMAIN, CONF_BOUND_ENTITY, CONF_VALUE_MIN, CONF_VALUE_MAX, CONF_BACKLIGHT_COLOR, CONF_UPDATE_MODE, UPDATE_MODE_AUTOMATIC
 from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_server
-from .device_config import async_get_config_manager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -195,7 +194,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Configure a specific dial."""
         if user_input is not None:
-            # Save dial configuration
+            # Save dial configuration  
+            from .device_config import async_get_config_manager
             config_manager = async_get_config_manager(self.hass)
             bound_entity = user_input.get("bound_entity")
             if bound_entity == "none":
@@ -215,6 +215,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data={})
 
         # Get current configuration
+        from .device_config import async_get_config_manager
         config_manager = async_get_config_manager(self.hass)
         current_config = config_manager.get_dial_config(self._selected_dial)
         
