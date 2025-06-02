@@ -38,7 +38,8 @@ class VU1APIClient:
         
         # Set base URL based on whether we're using ingress
         if self.ingress_slug and self.supervisor_token:
-            self.base_url = f"http://supervisor/addons/{self.ingress_slug}"
+            # Use internal Docker hostname for ingress-enabled add-ons
+            self.base_url = f"http://local-{self.ingress_slug}:{port or DEFAULT_PORT}"
             self._use_ingress = True
         else:
             self.base_url = f"http://{host}:{port}"
@@ -76,13 +77,8 @@ class VU1APIClient:
         if params is None:
             params = {}
             
-        # Add authentication
-        if self._use_ingress and self.supervisor_token:
-            # Use Supervisor token for ingress
-            headers["Authorization"] = f"Bearer {self.supervisor_token}"
-        else:
-            # Use API key for direct connection
-            params["key"] = self.api_key
+        # Add authentication - VU1 API key is used for both ingress and direct connections
+        params["key"] = self.api_key
 
         try:
             async with self.session.request(method, url, params=params, headers=headers) as response:
@@ -221,10 +217,12 @@ async def discover_vu1_addon() -> Dict[str, Any]:
                                     
                                     # Check if ingress is enabled
                                     if addon_data.get("ingress"):
-                                        _LOGGER.debug("Found VU1 Server add-on with ingress enabled")
+                                        ingress_port = addon_data.get("ingress_port", DEFAULT_PORT)
+                                        _LOGGER.debug("Found VU1 Server add-on with ingress enabled on port %s", ingress_port)
                                         return {
                                             "slug": slug,
                                             "ingress": True,
+                                            "ingress_port": ingress_port,
                                             "addon_discovered": True,
                                             "supervisor_token": supervisor_token
                                         }
@@ -260,19 +258,19 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
     addon_result = await discover_vu1_addon()
     if addon_result:
         if addon_result.get("ingress"):
-            # Test ingress connection
+            # Test ingress connection using internal Docker hostname
             client = VU1APIClient(
                 ingress_slug=addon_result["slug"],
                 supervisor_token=addon_result["supervisor_token"],
-                api_key=""  # API key not used for ingress
+                port=addon_result.get("ingress_port", DEFAULT_PORT),
+                api_key=""  # Test without API key first
             )
             try:
-                test_url = f"http://supervisor/addons/{addon_result['slug']}/api/v0/dial/list"
-                headers = {"Authorization": f"Bearer {addon_result['supervisor_token']}"}
-                async with client.session.get(test_url, headers=headers) as response:
-                    if response.status in [200, 401, 403]:  # Server responding
-                        _LOGGER.info("VU1 Server discovered via ingress at %s", addon_result["slug"])
-                        return addon_result
+                # Test connection using the client's methods
+                if await client.test_connection():
+                    _LOGGER.info("VU1 Server discovered via ingress at %s:%s", 
+                               f"local-{addon_result['slug']}", addon_result.get("ingress_port", DEFAULT_PORT))
+                    return addon_result
             except Exception as err:
                 _LOGGER.debug("Ingress add-on discovered but not reachable: %s", err)
             finally:

@@ -91,8 +91,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Create client based on connection type
     if entry.data.get("ingress"):
-        # Ingress connection
+        # Ingress connection via internal hostname
+        host = entry.data[CONF_HOST]  # local-{slug}
+        port = entry.data[CONF_PORT]
         client = VU1APIClient(
+            host=host,
+            port=port,
             ingress_slug=entry.data["ingress_slug"],
             supervisor_token=entry.data["supervisor_token"],
             api_key=api_key,
