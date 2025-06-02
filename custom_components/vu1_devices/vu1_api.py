@@ -79,8 +79,19 @@ class VU1APIClient:
 
         try:
             _LOGGER.debug("Making request: %s %s with params: %s", method, url, {k: v if k != "key" else f"{v[:8]}..." for k, v in params.items()})
+            _LOGGER.debug("Full URL being requested: %s", f"{url}?{'&'.join([f'{k}={v}' for k, v in params.items()])}" if params else url)
             async with self.session.request(method, url, params=params, headers=headers) as response:
                 _LOGGER.debug("Response status: %s", response.status)
+                _LOGGER.debug("Response headers: %s", dict(response.headers))
+                
+                # Log response body for error cases to help debug
+                if response.status >= 400:
+                    try:
+                        error_body = await response.text()
+                        _LOGGER.debug("Error response body: %s", error_body)
+                    except:
+                        _LOGGER.debug("Could not read error response body")
+                
                 response.raise_for_status()  # Raises exception for 4xx/5xx status codes
                 
                 if response.content_type == "application/json":
@@ -125,6 +136,20 @@ class VU1APIClient:
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.debug("Connection test failed: %s", err)
             return False
+
+    async def test_api_key(self) -> Dict[str, Any]:
+        """Test API key validity with detailed error information."""
+        try:
+            _LOGGER.info("Testing API key validation for key: %s...", self.api_key[:8] if len(self.api_key) > 8 else "****")
+            response = await self._request("GET", "api/v0/dial/list")
+            _LOGGER.info("API key validation successful")
+            return {"valid": True, "dials": response.get("data", [])}
+        except VU1APIError as err:
+            _LOGGER.error("API key validation failed: %s", err)
+            return {"valid": False, "error": str(err)}
+        except Exception as err:
+            _LOGGER.error("Unexpected error during API key validation: %s", err)
+            return {"valid": False, "error": f"Unexpected error: {err}"}
 
     async def get_dial_list(self) -> List[Dict[str, Any]]:
         """Get list of available dials."""
