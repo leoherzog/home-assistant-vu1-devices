@@ -54,9 +54,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._supervisor_token = discovered.get("supervisor_token")
                 
                 if self._discovered_ingress:
-                    # For ingress, use slug as identifier
-                    self._discovered_host = self._discovered_slug
-                    self._discovered_port = None
+                    # For ingress, use internal hostname as identifier
+                    self._discovered_host = f"local-{self._discovered_slug}"
+                    self._discovered_port = discovered.get("ingress_port", 5340)
                     unique_id = f"vu1_server_ingress_{self._discovered_slug}"
                 else:
                     # Use actual discovered host/port or defaults
@@ -106,12 +106,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             # Combine discovered info with user input
             if self._discovered_ingress:
-                # For ingress, store the ingress configuration
+                # For ingress, store as host/port but with special markers
                 full_input = {
-                    "ingress_slug": self._discovered_slug,
-                    "supervisor_token": self._supervisor_token,
+                    "host": self._discovered_host,  # local-{slug}
+                    "port": self._discovered_port,
                     "api_key": user_input["api_key"],
                     "ingress": True,
+                    "ingress_slug": self._discovered_slug,
+                    "supervisor_token": self._supervisor_token,
                 }
             else:
                 # For direct connection
@@ -225,8 +227,10 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     """
     if data.get("ingress"):
-        # Ingress connection
+        # Ingress connection via internal hostname
         client = VU1APIClient(
+            host=data["host"],  # local-{slug}
+            port=data["port"],
             ingress_slug=data["ingress_slug"],
             supervisor_token=data["supervisor_token"],
             api_key=data["api_key"],
