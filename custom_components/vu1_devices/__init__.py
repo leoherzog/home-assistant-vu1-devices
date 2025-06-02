@@ -87,11 +87,25 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up VU1 Devices from a config entry."""
-    host = entry.data[CONF_HOST]
-    port = entry.data[CONF_PORT]
     api_key = entry.data[CONF_API_KEY]
 
-    client = VU1APIClient(host, port, api_key)
+    # Create client based on connection type
+    if entry.data.get("ingress"):
+        # Ingress connection
+        client = VU1APIClient(
+            ingress_slug=entry.data["ingress_slug"],
+            supervisor_token=entry.data["supervisor_token"],
+            api_key=api_key,
+        )
+        connection_info = f"ingress ({entry.data['ingress_slug']})"
+        device_identifier = f"vu1_server_ingress_{entry.data['ingress_slug']}"
+    else:
+        # Direct connection
+        host = entry.data[CONF_HOST]
+        port = entry.data[CONF_PORT]
+        client = VU1APIClient(host, port, api_key)
+        connection_info = f"{host}:{port}"
+        device_identifier = f"vu1_server_{host}_{port}"
 
     # Test connection
     try:
@@ -114,10 +128,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, f"vu1_server_{host}_{port}")},
+        identifiers={(DOMAIN, device_identifier)},
         manufacturer="Streacom",
         model="VU1 Server",
-        name=f"VU1 Server ({host}:{port})",
+        name=f"VU1 Server ({connection_info})",
         sw_version="1.0",
     )
 
@@ -171,7 +185,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Remove server device from registry
         device_registry = dr.async_get(hass)
-        server_device_id = (DOMAIN, f"vu1_server_{entry.data[CONF_HOST]}_{entry.data[CONF_PORT]}")
+        if entry.data.get("ingress"):
+            device_identifier = f"vu1_server_ingress_{entry.data['ingress_slug']}"
+        else:
+            device_identifier = f"vu1_server_{entry.data[CONF_HOST]}_{entry.data[CONF_PORT]}"
+        
+        server_device_id = (DOMAIN, device_identifier)
         device = device_registry.async_get_device(identifiers={server_device_id})
         if device:
             device_registry.async_remove_device(device.id)
@@ -195,21 +214,21 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         value = call.data[ATTR_VALUE]
         
         # Find the correct client for this dial
-        client = None
+        dial_client = None
         coordinator = None
-        for entry_id, data in hass.data[DOMAIN].items():
+        for data in hass.data[DOMAIN].values():
             coord = data["coordinator"]
             if coord.data and dial_uid in coord.data:
-                client = data["client"]
+                dial_client = data["client"]
                 coordinator = coord
                 break
         
-        if not client:
+        if not dial_client:
             _LOGGER.error("Dial %s not found", dial_uid)
             return
         
         try:
-            await client.set_dial_value(dial_uid, value)
+            await dial_client.set_dial_value(dial_uid, value)
             # Refresh the coordinator that owns this dial
             await coordinator.async_request_refresh()
             _LOGGER.debug("Successfully set dial %s value to %s", dial_uid, value)
@@ -224,21 +243,21 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         blue = call.data[ATTR_BLUE]
         
         # Find the correct client for this dial
-        client = None
+        dial_client = None
         coordinator = None
-        for entry_id, data in hass.data[DOMAIN].items():
+        for data in hass.data[DOMAIN].values():
             coord = data["coordinator"]
             if coord.data and dial_uid in coord.data:
-                client = data["client"]
+                dial_client = data["client"]
                 coordinator = coord
                 break
         
-        if not client:
+        if not dial_client:
             _LOGGER.error("Dial %s not found", dial_uid)
             return
         
         try:
-            await client.set_dial_backlight(dial_uid, red, green, blue)
+            await dial_client.set_dial_backlight(dial_uid, red, green, blue)
             await coordinator.async_request_refresh()
         except VU1APIError as err:
             _LOGGER.error("Failed to set dial backlight for %s: %s", dial_uid, err)
@@ -249,21 +268,21 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         name = call.data[ATTR_NAME]
         
         # Find the correct client for this dial
-        client = None
+        dial_client = None
         coordinator = None
-        for entry_id, data in hass.data[DOMAIN].items():
+        for data in hass.data[DOMAIN].values():
             coord = data["coordinator"]
             if coord.data and dial_uid in coord.data:
-                client = data["client"]
+                dial_client = data["client"]
                 coordinator = coord
                 break
         
-        if not client:
+        if not dial_client:
             _LOGGER.error("Dial %s not found", dial_uid)
             return
         
         try:
-            await client.set_dial_name(dial_uid, name)
+            await dial_client.set_dial_name(dial_uid, name)
             await coordinator.async_request_refresh()
         except VU1APIError as err:
             _LOGGER.error("Failed to set dial name for %s: %s", dial_uid, err)
@@ -273,21 +292,21 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         dial_uid = call.data[ATTR_DIAL_UID]
         
         # Find the correct client for this dial
-        client = None
+        dial_client = None
         coordinator = None
-        for entry_id, data in hass.data[DOMAIN].items():
+        for data in hass.data[DOMAIN].values():
             coord = data["coordinator"]
             if coord.data and dial_uid in coord.data:
-                client = data["client"]
+                dial_client = data["client"]
                 coordinator = coord
                 break
         
-        if not client:
+        if not dial_client:
             _LOGGER.error("Dial %s not found", dial_uid)
             return
         
         try:
-            await client.reload_dial(dial_uid)
+            await dial_client.reload_dial(dial_uid)
             await coordinator.async_request_refresh()
         except VU1APIError as err:
             _LOGGER.error("Failed to reload dial for %s: %s", dial_uid, err)
@@ -297,21 +316,21 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         dial_uid = call.data[ATTR_DIAL_UID]
         
         # Find the correct client for this dial
-        client = None
+        dial_client = None
         coordinator = None
-        for entry_id, data in hass.data[DOMAIN].items():
+        for data in hass.data[DOMAIN].values():
             coord = data["coordinator"]
             if coord.data and dial_uid in coord.data:
-                client = data["client"]
+                dial_client = data["client"]
                 coordinator = coord
                 break
         
-        if not client:
+        if not dial_client:
             _LOGGER.error("Dial %s not found", dial_uid)
             return
         
         try:
-            await client.calibrate_dial(dial_uid)
+            await dial_client.calibrate_dial(dial_uid)
             await coordinator.async_request_refresh()
         except VU1APIError as err:
             _LOGGER.error("Failed to calibrate dial for %s: %s", dial_uid, err)

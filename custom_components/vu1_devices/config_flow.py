@@ -33,6 +33,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_host: Optional[str] = None
         self._discovered_port: Optional[int] = None
         self._discovery_method: Optional[str] = None
+        self._discovered_ingress: bool = False
+        self._discovered_slug: Optional[str] = None
+        self._supervisor_token: Optional[str] = None
 
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -45,12 +48,26 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             discovered = await discover_vu1_server()
             if discovered:
-                # Use actual discovered host/port or defaults
-                self._discovered_host = discovered.get("host", "localhost")
-                self._discovered_port = discovered.get("port", 5340)
+                # Store discovery information
+                self._discovered_ingress = discovered.get("ingress", False)
+                self._discovered_slug = discovered.get("slug")
+                self._supervisor_token = discovered.get("supervisor_token")
+                
+                if self._discovered_ingress:
+                    # For ingress, use slug as identifier
+                    self._discovered_host = self._discovered_slug
+                    self._discovered_port = None
+                    unique_id = f"vu1_server_ingress_{self._discovered_slug}"
+                else:
+                    # Use actual discovered host/port or defaults
+                    self._discovered_host = discovered.get("host", "localhost")
+                    self._discovered_port = discovered.get("port", 5340)
+                    unique_id = f"vu1_server_{self._discovered_host}_{self._discovered_port}"
+                
                 self._discovery_method = "addon" if discovered.get("addon_discovered") else "localhost"
+                
                 # Set unique ID to prevent duplicate configs
-                await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
+                await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
                 return await self.async_step_discovery()
 
@@ -88,11 +105,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             # Combine discovered info with user input
-            full_input = {
-                "host": self._discovered_host or user_input.get("host", "localhost"),
-                "port": self._discovered_port or user_input.get("port", 5340),
-                "api_key": user_input["api_key"],
-            }
+            if self._discovered_ingress:
+                # For ingress, store the ingress configuration
+                full_input = {
+                    "ingress_slug": self._discovered_slug,
+                    "supervisor_token": self._supervisor_token,
+                    "api_key": user_input["api_key"],
+                    "ingress": True,
+                }
+            else:
+                # For direct connection
+                full_input = {
+                    "host": self._discovered_host or user_input.get("host", "localhost"),
+                    "port": self._discovered_port or user_input.get("port", 5340),
+                    "api_key": user_input["api_key"],
+                }
 
             try:
                 info = await validate_input(self.hass, full_input)
@@ -105,26 +132,39 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 # Update unique ID with final configuration
-                await self.async_set_unique_id(f"vu1_server_{full_input['host']}_{full_input['port']}")
+                if self._discovered_ingress:
+                    await self.async_set_unique_id(f"vu1_server_ingress_{self._discovered_slug}")
+                else:
+                    await self.async_set_unique_id(f"vu1_server_{full_input['host']}_{full_input['port']}")
                 return self.async_create_entry(title=info["title"], data=full_input)
 
         # Show form with discovered info pre-filled
-        discovery_schema = vol.Schema(
-            {
-                vol.Required(
-                    "host", default=self._discovered_host or "localhost"
-                ): cv.string,
-                vol.Required(
-                    "port", default=self._discovered_port or 5340
-                ): cv.port,
+        if self._discovered_ingress:
+            # For ingress, only show API key field
+            discovery_schema = vol.Schema({
                 vol.Required("api_key"): cv.string,
-            }
-        )
+            })
+        else:
+            # For direct connection, show all fields
+            discovery_schema = vol.Schema(
+                {
+                    vol.Required(
+                        "host", default=self._discovered_host or "localhost"
+                    ): cv.string,
+                    vol.Required(
+                        "port", default=self._discovered_port or 5340
+                    ): cv.port,
+                    vol.Required("api_key"): cv.string,
+                }
+            )
 
         # Add helpful description based on discovery method
         description_placeholders = {}
         if self._discovery_method == "addon":
-            description_placeholders["discovery_info"] = f"VU1 Server add-on auto-discovered at {self._discovered_host}:{self._discovered_port}. This uses the internal add-on network and doesn't require exposing ports."
+            if hasattr(self, '_discovered_ingress') and self._discovered_ingress:
+                description_placeholders["discovery_info"] = f"VU1 Server add-on auto-discovered with ingress enabled. This uses the internal Home Assistant proxy and doesn't require exposing ports."
+            else:
+                description_placeholders["discovery_info"] = f"VU1 Server add-on auto-discovered at {self._discovered_host}:{self._discovered_port}. This uses the internal add-on network and doesn't require exposing ports."
         else:
             description_placeholders["discovery_info"] = f"VU1 Server discovered at {self._discovered_host}:{self._discovered_port}. Verify the server is accessible and ports are properly configured."
 
@@ -184,14 +224,25 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
 
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     """
-    client = VU1APIClient(
-        host=data["host"],
-        port=data["port"],
-        api_key=data["api_key"],
-    )
+    if data.get("ingress"):
+        # Ingress connection
+        client = VU1APIClient(
+            ingress_slug=data["ingress_slug"],
+            supervisor_token=data["supervisor_token"],
+            api_key=data["api_key"],
+        )
+        connection_info = f"ingress ({data['ingress_slug']})"
+    else:
+        # Direct connection
+        client = VU1APIClient(
+            host=data["host"],
+            port=data["port"],
+            api_key=data["api_key"],
+        )
+        connection_info = f"{data['host']}:{data['port']}"
 
     try:
-        _LOGGER.debug("Testing connection to VU1 server at %s:%s", data["host"], data["port"])
+        _LOGGER.debug("Testing connection to VU1 server at %s", connection_info)
         
         # Test the connection by getting dial list
         dials = await client.get_dial_list()
@@ -207,6 +258,6 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
 
     # Return info that you want to store in the config entry.
     return {
-        "title": f"VU1 Devices ({data['host']}:{data['port']})",
+        "title": f"VU1 Devices ({connection_info})",
         "dial_count": len(dials),
     }
