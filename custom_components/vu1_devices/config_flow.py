@@ -56,9 +56,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._supervisor_token = discovered.get("supervisor_token")
                 
                 if self._discovered_ingress:
-                    # For ingress, use internal hostname as identifier
-                    self._discovered_host = f"local-{self._discovered_slug}"
-                    self._discovered_port = discovered.get("ingress_port", 5340)
+                    # For ingress, use actual IP and port
+                    self._discovered_host = discovered.get("host", f"local-{self._discovered_slug}")
+                    self._discovered_port = discovered.get("port", discovered.get("ingress_port", 5340))
                     unique_id = f"vu1_server_ingress_{self._discovered_slug}"
                 else:
                     # Use actual discovered host/port or defaults
