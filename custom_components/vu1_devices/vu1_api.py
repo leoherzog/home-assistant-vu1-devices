@@ -186,7 +186,7 @@ async def discover_vu1_addon() -> Dict[str, Any]:
     """Discover VU1 Server add-on via Home Assistant Supervisor API."""
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
     if not supervisor_token:
-        _LOGGER.debug("No SUPERVISOR_TOKEN available, not running in Home Assistant OS")
+        _LOGGER.warning("No SUPERVISOR_TOKEN available, not running in Home Assistant OS")
         return {}
     
     try:
@@ -196,7 +196,7 @@ async def discover_vu1_addon() -> Dict[str, Any]:
             headers = {"Authorization": f"Bearer {supervisor_token}"}
             async with session.get("http://supervisor/addons", headers=headers) as response:
                 if response.status != 200:
-                    _LOGGER.debug("Failed to get add-ons list from Supervisor API")
+                    _LOGGER.warning("Failed to get add-ons list from Supervisor API: HTTP %s", response.status)
                     return {}
                 
                 data = await response.json()
@@ -250,19 +250,22 @@ async def discover_vu1_addon() -> Dict[str, Any]:
                             _LOGGER.debug("VU1 Server add-on found but not running")
                             return {}
                 
-                _LOGGER.debug("VU1 Server add-on not found in installed add-ons")
+                _LOGGER.warning("VU1 Server add-on not found in installed add-ons")
                 return {}
                 
     except Exception as err:
-        _LOGGER.debug("Error discovering VU1 Server add-on: %s", err)
+        _LOGGER.error("Error discovering VU1 Server add-on: %s", err)
         return {}
 
 
 async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT) -> Dict[str, Any]:
     """Discover VU1 server. Try add-on first, then fallback to direct connection."""
+    _LOGGER.info("Starting VU1 server discovery...")
+    
     # First try to discover via add-on
     addon_result = await discover_vu1_addon()
     if addon_result:
+        _LOGGER.info("Add-on discovery returned: %s", addon_result)
         if addon_result.get("ingress"):
             # Test ingress connection using internal Docker hostname
             client = VU1APIClient(
@@ -295,6 +298,7 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
                 await client.close()
     
     # Fallback to localhost discovery
+    _LOGGER.info("Add-on discovery failed, trying localhost fallback...")
     client = VU1APIClient(host, port, "")
     try:
         async with client.session.get(f"http://{host}:{port}/api/v0/dial/list") as response:
