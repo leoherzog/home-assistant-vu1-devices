@@ -36,14 +36,9 @@ class VU1APIClient:
         self.ingress_slug = ingress_slug
         self.supervisor_token = supervisor_token
         
-        # Set base URL based on whether we're using ingress
-        if self.ingress_slug and self.supervisor_token:
-            # Use internal Docker hostname for ingress-enabled add-ons
-            self.base_url = f"http://local-{self.ingress_slug}:{port or DEFAULT_PORT}"
-            self._use_ingress = True
-        else:
-            self.base_url = f"http://{host}:{port}"
-            self._use_ingress = False
+        # Set base URL - always use provided host and port
+        self.base_url = f"http://{host}:{port}"
+        self._use_ingress = bool(self.ingress_slug and self.supervisor_token)
             
         self._session = session
         self._close_session = False
