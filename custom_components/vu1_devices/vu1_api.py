@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 from aiohttp import ClientError, ClientTimeout
+import os
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -140,6 +141,7 @@ class VU1APIClient:
         """Set dial background image."""
         # This endpoint might need special handling for file uploads
         # Implementation depends on server API specifics
+        _ = dial_uid, image_data  # Suppress unused parameter warnings
         raise NotImplementedError("Image upload not yet implemented")
 
     async def reload_dial(self, dial_uid: str) -> None:
@@ -164,14 +166,80 @@ class VU1APIClient:
         return response.get("data", {})
 
 
+async def discover_vu1_addon() -> Dict[str, Any]:
+    """Discover VU1 Server add-on via Home Assistant Supervisor API."""
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if not supervisor_token:
+        _LOGGER.debug("No SUPERVISOR_TOKEN available, not running in Home Assistant OS")
+        return {}
+    
+    try:
+        timeout = ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Get list of installed add-ons
+            headers = {"Authorization": f"Bearer {supervisor_token}"}
+            async with session.get("http://supervisor/addons", headers=headers) as response:
+                if response.status != 200:
+                    _LOGGER.debug("Failed to get add-ons list from Supervisor API")
+                    return {}
+                
+                data = await response.json()
+                addons = data.get("data", {}).get("addons", [])
+                
+                # Look for VU1 Server add-on
+                for addon in addons:
+                    if addon.get("slug") == "vu-server-addon":
+                        if addon.get("state") == "started":
+                            # Found running VU1 Server add-on
+                            # Generate internal Docker hostname from repository and slug
+                            repo = addon.get("repository", "local")
+                            slug = addon.get("slug", "vu-server-addon")
+                            
+                            # Convert to valid hostname (replace _ with -)
+                            hostname = f"{repo}_{slug}".replace("_", "-")
+                            
+                            _LOGGER.debug("Found VU1 Server add-on: %s", hostname)
+                            return {
+                                "host": hostname,
+                                "port": DEFAULT_PORT,
+                                "addon_discovered": True
+                            }
+                        else:
+                            _LOGGER.debug("VU1 Server add-on found but not running")
+                            return {}
+                
+                _LOGGER.debug("VU1 Server add-on not found in installed add-ons")
+                return {}
+                
+    except Exception as err:
+        _LOGGER.debug("Error discovering VU1 Server add-on: %s", err)
+        return {}
+
+
 async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT) -> Dict[str, Any]:
-    """Discover VU1 server on given host and port."""
+    """Discover VU1 server. Try add-on first, then fallback to direct connection."""
+    # First try to discover via add-on
+    addon_result = await discover_vu1_addon()
+    if addon_result:
+        # Test if the add-on is actually reachable
+        client = VU1APIClient(addon_result["host"], addon_result["port"], "")
+        try:
+            async with client.session.get(f"http://{addon_result['host']}:{addon_result['port']}/api/v0/dial/list") as response:
+                if response.status in [200, 401, 403]:  # Server responding
+                    _LOGGER.info("VU1 Server discovered via add-on at %s:%s", addon_result["host"], addon_result["port"])
+                    return addon_result
+        except Exception as err:
+            _LOGGER.debug("Add-on discovered but not reachable: %s", err)
+        finally:
+            await client.close()
+    
+    # Fallback to localhost discovery
     client = VU1APIClient(host, port, "")
     try:
-        # Try to connect without API key first - just check if server is running
         async with client.session.get(f"http://{host}:{port}/api/v0/dial/list") as response:
             if response.status in [200, 401, 403]:  # Server responding (401/403 expected without key)
-                return {"host": host, "port": port}
+                _LOGGER.info("VU1 Server discovered at %s:%s", host, port)
+                return {"host": host, "port": port, "addon_discovered": False}
             return {}
     except (ClientError, asyncio.TimeoutError):
         return {}
