@@ -46,9 +46,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Try auto-discovery first
         if user_input is None:
-            _LOGGER.info("Starting VU1 server auto-discovery...")
+            _LOGGER.error("DEBUG: VU1 integration auto-discovery starting...")
             discovered = await discover_vu1_server()
-            _LOGGER.info("Discovery result: %s", discovered)
+            _LOGGER.error("DEBUG: VU1 discovery result: %s", discovered)
             if discovered:
                 # Store discovery information
                 self._discovered_ingress = discovered.get("ingress", False)
