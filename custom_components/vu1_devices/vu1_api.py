@@ -208,17 +208,17 @@ class VU1APIClient:
         """Reload dial configuration."""
         await self._request("GET", f"api/v0/dial/{dial_uid}/reload")
 
-    async def calibrate_dial(self, dial_uid: str) -> None:
-        """Calibrate dial."""
-        await self._request("GET", f"api/v0/dial/{dial_uid}/calibrate")
+    async def calibrate_dial(self, dial_uid: str, value: int = 1024) -> None:
+        """Calibrate dial to specific value."""
+        await self._request("GET", f"api/v0/dial/{dial_uid}/calibrate", {"value": value})
 
-    async def set_dial_easing(self, dial_uid: str, easing_type: str) -> None:
-        """Set dial easing type."""
-        await self._request("GET", f"api/v0/dial/{dial_uid}/easing/dial", {"easing": easing_type})
+    async def set_dial_easing(self, dial_uid: str, period: int, step: int) -> None:
+        """Set dial easing configuration."""
+        await self._request("GET", f"api/v0/dial/{dial_uid}/easing/dial", {"period": period, "step": step})
 
-    async def set_backlight_easing(self, dial_uid: str, easing_type: str) -> None:
-        """Set backlight easing type."""
-        await self._request("GET", f"api/v0/dial/{dial_uid}/easing/backlight", {"easing": easing_type})
+    async def set_backlight_easing(self, dial_uid: str, period: int, step: int) -> None:
+        """Set backlight easing configuration."""
+        await self._request("GET", f"api/v0/dial/{dial_uid}/easing/backlight", {"period": period, "step": step})
 
     async def get_easing_options(self, dial_uid: str) -> Dict[str, Any]:
         """Get available easing options."""
