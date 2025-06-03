@@ -30,6 +30,10 @@
     }
   },
   "options": {
+    "error": {
+      "config_error": "Failed to load device configuration",
+      "config_update_failed": "Failed to update dial configuration"
+    },
     "step": {
       "init": {
         "title": "VU1 Devices Options",
@@ -49,7 +53,9 @@
           "update_mode": "Update mode",
           "backlight_red": "Backlight Red (0-100)",
           "backlight_green": "Backlight Green (0-100)",
-          "backlight_blue": "Backlight Blue (0-100)"
+          "backlight_blue": "Backlight Blue (0-100)",
+          "dial_easing": "Dial animation easing",
+          "backlight_easing": "Backlight animation easing"
         }
       }
     }
