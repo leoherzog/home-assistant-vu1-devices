@@ -82,20 +82,19 @@ class VU1APIClient:
         # Add VU1 API key authentication 
         if self.api_key:
             params["key"] = self.api_key
-            _LOGGER.debug("Using API key: %s...", self.api_key[:8] if len(self.api_key) > 8 else "****")
+            _LOGGER.debug("Using API key authentication")
 
         try:
-            _LOGGER.debug("Making request: %s %s with params: %s", method, url, {k: v if k != "key" else f"{v[:8]}..." for k, v in params.items()})
-            _LOGGER.debug("Full URL being requested: %s", f"{url}?{'&'.join([f'{k}={v}' for k, v in params.items()])}" if params else url)
+            endpoint_name = endpoint.split('/')[-1] if '/' in endpoint else endpoint
+            _LOGGER.debug("Making API request to %s", endpoint_name)
             async with self.session.request(method, url, params=params, headers=headers) as response:
                 _LOGGER.debug("Response status: %s", response.status)
-                _LOGGER.debug("Response headers: %s", dict(response.headers))
                 
                 # Log response body for error cases to help debug
                 if response.status >= 400:
                     try:
                         error_body = await response.text()
-                        _LOGGER.debug("Error response body: %s", error_body)
+                        _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
                     except:
                         _LOGGER.debug("Could not read error response body")
                 
@@ -147,9 +146,9 @@ class VU1APIClient:
     async def test_api_key(self) -> Dict[str, Any]:
         """Test API key validity with detailed error information."""
         try:
-            _LOGGER.info("Testing API key validation for key: %s...", self.api_key[:8] if len(self.api_key) > 8 else "****")
+            _LOGGER.debug("Testing API key validation")
             response = await self._request("GET", "api/v0/dial/list")
-            _LOGGER.info("API key validation successful")
+            _LOGGER.debug("API key validation successful")
             return {"valid": True, "dials": response.get("data", [])}
         except VU1APIError as err:
             _LOGGER.error("API key validation failed: %s", err)
@@ -248,8 +247,6 @@ async def discover_vu1_addon() -> Dict[str, Any]:
                 addons = data.get("data", {}).get("addons", [])
                 
                 _LOGGER.debug("Found %d add-ons via Supervisor API", len(addons))
-                for addon in addons:
-                    _LOGGER.debug("Add-on: %s (state: %s)", addon.get("slug"), addon.get("state"))
                 
                 # Look for VU1 Server add-on (handle different repository prefixes)
                 for addon in addons:
@@ -271,8 +268,7 @@ async def discover_vu1_addon() -> Dict[str, Any]:
                                         ingress_port = addon_data.get("ingress_port", DEFAULT_PORT)
                                         # Get the actual IP address from addon info
                                         addon_ip = addon_data.get("ip_address")
-                                        _LOGGER.debug("Found VU1 Server add-on with ingress enabled on port %s, IP: %s", ingress_port, addon_ip)
-                                        _LOGGER.debug("Full addon data: %s", addon_data)
+                                        _LOGGER.debug("Found VU1 Server add-on with ingress enabled on port %s", ingress_port)
                                         return {
                                             "slug": slug,
                                             "ingress": True,
@@ -309,12 +305,12 @@ async def discover_vu1_addon() -> Dict[str, Any]:
 
 async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT) -> Dict[str, Any]:
     """Discover VU1 server. Try add-on first, then fallback to direct connection."""
-    _LOGGER.info("Starting VU1 server discovery...")
+    _LOGGER.debug("Starting VU1 server discovery...")
     
     # First try to discover via add-on
     addon_result = await discover_vu1_addon()
     if addon_result:
-        _LOGGER.info("Add-on discovery returned: %s", addon_result)
+        _LOGGER.debug("Add-on discovery found VU1 server addon")
         if addon_result.get("ingress"):
             # Test ingress connection using actual IP address
             addon_ip = addon_result.get("addon_ip")
@@ -328,11 +324,10 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
                 )
                 try:
                     # Test connection using the client's methods
-                    _LOGGER.info("Testing ingress connection to %s:%s", 
+                    _LOGGER.debug("Testing ingress connection to %s:%s", 
                                addon_ip, addon_result.get("ingress_port", DEFAULT_PORT))
                     if await client.test_connection():
-                        _LOGGER.info("VU1 Server discovered via ingress at %s:%s", 
-                                   addon_ip, addon_result.get("ingress_port", DEFAULT_PORT))
+                        _LOGGER.info("VU1 Server discovered via ingress")
                         # Update the result to use IP instead of hostname
                         addon_result["host"] = addon_ip
                         addon_result["port"] = addon_result.get("ingress_port", DEFAULT_PORT)
@@ -351,7 +346,7 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
             try:
                 async with client.session.get(f"http://{addon_result['host']}:{addon_result['port']}/api/v0/dial/list") as response:
                     if response.status in [200, 401, 403]:  # Server responding
-                        _LOGGER.info("VU1 Server discovered via add-on at %s:%s", addon_result["host"], addon_result["port"])
+                        _LOGGER.info("VU1 Server discovered via add-on")
                         return addon_result
             except Exception as err:
                 _LOGGER.debug("Add-on discovered but not reachable: %s", err)
@@ -359,12 +354,12 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
                 await client.close()
     
     # Fallback to localhost discovery
-    _LOGGER.info("Add-on discovery failed, trying localhost fallback...")
+    _LOGGER.debug("Add-on discovery failed, trying localhost fallback...")
     client = VU1APIClient(host, port, "")
     try:
         async with client.session.get(f"http://{host}:{port}/api/v0/dial/list") as response:
             if response.status in [200, 401, 403]:  # Server responding (401/403 expected without key)
-                _LOGGER.info("VU1 Server discovered at %s:%s", host, port)
+                _LOGGER.info("VU1 Server discovered at localhost")
                 return {"host": host, "port": port, "addon_discovered": False}
             return {}
     except (ClientError, asyncio.TimeoutError):
