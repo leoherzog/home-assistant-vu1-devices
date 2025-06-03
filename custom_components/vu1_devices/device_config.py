@@ -77,6 +77,10 @@ class VU1DialConfigManager:
             CONF_DIAL_EASING: "linear",
             CONF_BACKLIGHT_EASING: "linear",
             CONF_UPDATE_MODE: DEFAULT_UPDATE_MODE,
+            "dial_easing_period": 50,
+            "dial_easing_step": 5,
+            "backlight_easing_period": 50,
+            "backlight_easing_step": 5,
         }
 
     def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:

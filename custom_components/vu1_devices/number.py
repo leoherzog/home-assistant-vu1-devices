@@ -18,6 +18,10 @@ from .config_entities import (
     VU1BacklightRedNumber,
     VU1BacklightGreenNumber,
     VU1BacklightBlueNumber,
+    VU1DialEasingPeriodNumber,
+    VU1DialEasingStepNumber,
+    VU1BacklightEasingPeriodNumber,
+    VU1BacklightEasingStepNumber,
 )
 
 if TYPE_CHECKING:
@@ -51,6 +55,10 @@ async def async_setup_entry(
             VU1BacklightRedNumber(coordinator, dial_uid, dial_info),
             VU1BacklightGreenNumber(coordinator, dial_uid, dial_info),
             VU1BacklightBlueNumber(coordinator, dial_uid, dial_info),
+            VU1DialEasingPeriodNumber(coordinator, dial_uid, dial_info),
+            VU1DialEasingStepNumber(coordinator, dial_uid, dial_info),
+            VU1BacklightEasingPeriodNumber(coordinator, dial_uid, dial_info),
+            VU1BacklightEasingStepNumber(coordinator, dial_uid, dial_info),
         ])
 
     async_add_entities(entities)
