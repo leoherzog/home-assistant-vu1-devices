@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import selector
 
 from .const import DOMAIN
 from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_server
@@ -194,27 +195,190 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
         self.config_entry = config_entry
+        self._dials = []
+        self._selected_dial = None
 
     async def async_step_init(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> FlowResult:
         """Manage the options."""
+        errors: Dict[str, str] = {}
+        
+        # Get available dials
+        try:
+            coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+            if coordinator.data:
+                dials_data = coordinator.data.get("dials", {})
+                self._dials = [
+                    {
+                        "value": dial_uid, 
+                        "label": f"{dial_data.get('dial_name', f'VU1 Dial {dial_uid}')} ({dial_uid})"
+                    }
+                    for dial_uid, dial_data in dials_data.items()
+                ]
+        except Exception as err:
+            _LOGGER.warning("Could not get dial list for options: %s", err)
+            self._dials = []
+
         if user_input is not None:
+            if "configure_dial" in user_input and user_input["configure_dial"]:
+                self._selected_dial = user_input["configure_dial"]
+                return await self.async_step_configure_dial()
+            
+            # Just update interval
             return self.async_create_entry(title="", data=user_input)
 
-        # Simple options flow with just update interval
-        schema = vol.Schema({
+        # Schema with dial selection and update interval
+        schema_dict = {
             vol.Optional(
                 "update_interval",
                 default=self.config_entry.options.get("update_interval", 30),
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
-        })
+        }
+        
+        # Add dial configuration option if dials are available
+        if self._dials:
+            schema_dict[vol.Optional("configure_dial")] = selector.SelectSelector(
+                selector.SelectSelectorConfig(options=self._dials)
+            )
 
         return self.async_show_form(
             step_id="init",
-            data_schema=schema,
+            data_schema=vol.Schema(schema_dict),
+            errors=errors,
             description_placeholders={
-                "info": "Dial configuration is now available in device controls. Update interval controls how often dial values are refreshed."
+                "info": "Select a dial to configure sensor binding and advanced settings."
+            },
+        )
+
+    async def async_step_configure_dial(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> FlowResult:
+        """Configure specific dial with proper entity selector."""
+        errors: Dict[str, str] = {}
+        
+        if not self._selected_dial:
+            return await self.async_step_init()
+
+        # Get current configuration
+        try:
+            from .device_config import async_get_config_manager
+            config_manager = async_get_config_manager(self.hass)
+            current_config = config_manager.get_dial_config(self._selected_dial)
+        except Exception as err:
+            _LOGGER.error("Failed to get device config manager: %s", err)
+            errors["base"] = "config_error"
+            return await self.async_step_init()
+
+        if user_input is not None:
+            try:
+                # Process and save configuration
+                processed_config = {
+                    "update_mode": user_input.get("update_mode", "manual"),
+                }
+                
+                # Only include bound entity and ranges for automatic mode
+                if user_input.get("update_mode") == "automatic":
+                    processed_config.update({
+                        "bound_entity": user_input.get("bound_entity") or None,
+                        "value_min": user_input.get("value_min", 0),
+                        "value_max": user_input.get("value_max", 100),
+                    })
+                else:
+                    # Clear bound entity for manual mode
+                    processed_config.update({
+                        "bound_entity": None,
+                        "value_min": 0,
+                        "value_max": 100,
+                    })
+                
+                await config_manager.async_update_dial_config(self._selected_dial, processed_config)
+                
+                # Update sensor bindings
+                from .sensor_binding import async_get_binding_manager
+                binding_manager = async_get_binding_manager(self.hass)
+                coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+                if coordinator.data:
+                    dials_data = coordinator.data.get("dials", {})
+                    if self._selected_dial in dials_data:
+                        await binding_manager._update_binding(
+                            self._selected_dial, 
+                            processed_config, 
+                            dials_data[self._selected_dial]
+                        )
+                
+                return self.async_create_entry(title="", data=self.config_entry.options)
+                
+            except Exception as err:
+                _LOGGER.error("Failed to update dial configuration: %s", err)
+                errors["base"] = "config_update_failed"
+
+        # Get dial info for display
+        coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+        dials_data = coordinator.data.get("dials", {})
+        dial_data = dials_data.get(self._selected_dial, {})
+        dial_name = dial_data.get("dial_name", self._selected_dial)
+
+        # Entity selector configuration
+        entity_selector_config = selector.EntitySelectorConfig(
+            domain=["sensor", "input_number", "number", "counter"],
+            multiple=False,
+        )
+
+        # Build conditional schema based on update mode
+        schema_dict = {
+            vol.Optional(
+                "update_mode", 
+                default=current_config.get("update_mode", "manual")
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": "automatic", "label": "Automatic (sensor-driven)"},
+                        {"value": "manual", "label": "Manual only"}
+                    ]
+                )
+            ),
+        }
+        
+        # Only show entity selector and value ranges for automatic mode
+        if user_input and user_input.get("update_mode") == "automatic":
+            schema_dict.update({
+                vol.Required("bound_entity"): selector.EntitySelector(entity_selector_config),
+                vol.Optional(
+                    "value_min", 
+                    default=current_config.get("value_min", 0)
+                ): vol.All(vol.Coerce(float), vol.Range(min=-1000, max=1000)),
+                vol.Optional(
+                    "value_max", 
+                    default=current_config.get("value_max", 100)
+                ): vol.All(vol.Coerce(float), vol.Range(min=-1000, max=1000)),
+            })
+        elif current_config.get("update_mode") == "automatic":
+            # Show fields with current values for automatic mode
+            schema_dict.update({
+                vol.Optional(
+                    "bound_entity", 
+                    default=current_config.get("bound_entity")
+                ): selector.EntitySelector(entity_selector_config),
+                vol.Optional(
+                    "value_min", 
+                    default=current_config.get("value_min", 0)
+                ): vol.All(vol.Coerce(float), vol.Range(min=-1000, max=1000)),
+                vol.Optional(
+                    "value_max", 
+                    default=current_config.get("value_max", 100)
+                ): vol.All(vol.Coerce(float), vol.Range(min=-1000, max=1000)),
+            })
+        
+        schema = vol.Schema(schema_dict)
+
+        return self.async_show_form(
+            step_id="configure_dial",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "dial_name": dial_name,
+                "info": "Choose update mode. Automatic mode requires selecting a sensor and value range mapping. Other settings (backlight, easing, name) are available in device controls."
             },
         )
 

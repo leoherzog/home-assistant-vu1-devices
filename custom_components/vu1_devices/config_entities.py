@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 from homeassistant.components.number import NumberEntity, NumberDeviceClass
 from homeassistant.components.select import SelectEntity
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -52,75 +53,6 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         binding_manager = async_get_binding_manager(self.hass)
         await binding_manager._update_binding(self._dial_uid, new_config, self._dial_data)
 
-
-class VU1BoundEntitySelect(VU1ConfigEntityBase, SelectEntity):
-    """Select entity for bound sensor."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
-        """Initialize the bound entity select."""
-        super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_bound_entity"
-        self._attr_name = "Bound sensor"
-        self._attr_icon = "mdi:link"
-        self._attr_options = ["None"]  # Default options, will be updated when added to hass
-
-    def _update_options(self) -> None:
-        """Update available options."""
-        if not self.hass:
-            return
-            
-        entity_registry = er.async_get(self.hass)
-        options = ["None"]
-        
-        for entity in entity_registry.entities.values():
-            if entity.domain in ["sensor", "input_number", "number", "counter"]:
-                state = self.hass.states.get(entity.entity_id)
-                if state and state.state not in ["unknown", "unavailable"]:
-                    try:
-                        float(state.state)
-                        display_name = entity.name or entity.entity_id
-                        options.append(f"{entity.entity_id}|{display_name}")
-                    except (ValueError, TypeError):
-                        pass
-        
-        self._attr_options = options
-
-    @property
-    def current_option(self) -> str:
-        """Return current option."""
-        # Update options when accessed
-        self._update_options()
-        
-        if not self.hass:
-            return "None"
-            
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        bound_entity = config.get("bound_entity")
-        
-        if not bound_entity:
-            return "None"
-            
-        # Find display option
-        for option in self._attr_options:
-            if "|" in option and option.split("|")[0] == bound_entity:
-                return option
-        return "None"
-
-    async def async_select_option(self, option: str) -> None:
-        """Change the selected option."""
-        if option == "None":
-            bound_entity = None
-        else:
-            bound_entity = option.split("|")[0] if "|" in option else option
-            
-        await self._update_config(bound_entity=bound_entity)
-        
-    async def async_added_to_hass(self) -> None:
-        """Run when entity is added to hass."""
-        await super().async_added_to_hass()
-        # Update options when entity is added to hass
-        self._update_options()
 
 
 class VU1ValueMinNumber(VU1ConfigEntityBase, NumberEntity):
@@ -448,6 +380,112 @@ class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
                 _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
 
 
+class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
+    """Sensor showing current update mode."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the update mode sensor."""
+        super().__init__(coordinator, dial_uid, dial_data)
+        self._attr_unique_id = f"{dial_uid}_update_mode_status"
+        self._attr_name = "Update mode"
+        self._attr_icon = "mdi:update"
+
+    @property
+    def native_value(self) -> str:
+        """Return the current update mode."""
+        if not self.hass:
+            return "unknown"
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        return config.get("update_mode", "manual").title()
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return additional state attributes."""
+        if not self.hass:
+            return {}
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        attrs = {
+            "update_mode": config.get("update_mode", "manual"),
+        }
+        
+        if config.get("update_mode") == "automatic":
+            attrs.update({
+                "bound_entity": config.get("bound_entity"),
+                "value_min": config.get("value_min", 0),
+                "value_max": config.get("value_max", 100),
+            })
+        
+        return attrs
+
+
+class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
+    """Sensor showing currently bound entity."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the bound entity sensor."""
+        super().__init__(coordinator, dial_uid, dial_data)
+        self._attr_unique_id = f"{dial_uid}_bound_entity_status"
+        self._attr_name = "Bound entity"
+        self._attr_icon = "mdi:link"
+
+    @property
+    def native_value(self) -> str:
+        """Return the currently bound entity."""
+        if not self.hass:
+            return "None"
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        if config.get("update_mode") != "automatic":
+            return "Manual mode"
+            
+        bound_entity = config.get("bound_entity")
+        if not bound_entity:
+            return "None"
+            
+        # Get friendly name if available
+        state = self.hass.states.get(bound_entity)
+        if state:
+            friendly_name = state.attributes.get("friendly_name")
+            if friendly_name:
+                return friendly_name
+                
+        return bound_entity
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return additional state attributes."""
+        if not self.hass:
+            return {}
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        attrs = {
+            "update_mode": config.get("update_mode", "manual"),
+            "bound_entity_id": config.get("bound_entity"),
+        }
+        
+        # Add current sensor value if bound
+        bound_entity = config.get("bound_entity")
+        if bound_entity and config.get("update_mode") == "automatic":
+            state = self.hass.states.get(bound_entity)
+            if state:
+                attrs.update({
+                    "sensor_state": state.state,
+                    "sensor_unit": state.attributes.get("unit_of_measurement"),
+                    "last_updated": state.last_updated.isoformat(),
+                })
+        
+        return attrs
+
+
 class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for backlight easing step."""
 
@@ -490,3 +528,109 @@ class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
                 )
             except Exception as err:
                 _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
+
+
+class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
+    """Sensor showing current update mode."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the update mode sensor."""
+        super().__init__(coordinator, dial_uid, dial_data)
+        self._attr_unique_id = f"{dial_uid}_update_mode_status"
+        self._attr_name = "Update mode"
+        self._attr_icon = "mdi:update"
+
+    @property
+    def native_value(self) -> str:
+        """Return the current update mode."""
+        if not self.hass:
+            return "unknown"
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        return config.get("update_mode", "manual").title()
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return additional state attributes."""
+        if not self.hass:
+            return {}
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        attrs = {
+            "update_mode": config.get("update_mode", "manual"),
+        }
+        
+        if config.get("update_mode") == "automatic":
+            attrs.update({
+                "bound_entity": config.get("bound_entity"),
+                "value_min": config.get("value_min", 0),
+                "value_max": config.get("value_max", 100),
+            })
+        
+        return attrs
+
+
+class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
+    """Sensor showing currently bound entity."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the bound entity sensor."""
+        super().__init__(coordinator, dial_uid, dial_data)
+        self._attr_unique_id = f"{dial_uid}_bound_entity_status"
+        self._attr_name = "Bound entity"
+        self._attr_icon = "mdi:link"
+
+    @property
+    def native_value(self) -> str:
+        """Return the currently bound entity."""
+        if not self.hass:
+            return "None"
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        if config.get("update_mode") != "automatic":
+            return "Manual mode"
+            
+        bound_entity = config.get("bound_entity")
+        if not bound_entity:
+            return "None"
+            
+        # Get friendly name if available
+        state = self.hass.states.get(bound_entity)
+        if state:
+            friendly_name = state.attributes.get("friendly_name")
+            if friendly_name:
+                return friendly_name
+                
+        return bound_entity
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return additional state attributes."""
+        if not self.hass:
+            return {}
+            
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        attrs = {
+            "update_mode": config.get("update_mode", "manual"),
+            "bound_entity_id": config.get("bound_entity"),
+        }
+        
+        # Add current sensor value if bound
+        bound_entity = config.get("bound_entity")
+        if bound_entity and config.get("update_mode") == "automatic":
+            state = self.hass.states.get(bound_entity)
+            if state:
+                attrs.update({
+                    "sensor_state": state.state,
+                    "sensor_unit": state.attributes.get("unit_of_measurement"),
+                    "last_updated": state.last_updated.isoformat(),
+                })
+        
+        return attrs
