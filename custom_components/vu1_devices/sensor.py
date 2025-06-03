@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 from .vu1_api import VU1APIClient
+from .config_entities import VU1UpdateModeSensor, VU1BoundEntitySensor
 
 if TYPE_CHECKING:
     from . import VU1DataUpdateCoordinator
@@ -33,7 +34,14 @@ async def async_setup_entry(
     # Create sensor entities for each dial
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
+        # Main dial sensor
         entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_info))
+        
+        # Configuration status sensors
+        entities.extend([
+            VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
+            VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
+        ])
 
     async_add_entities(entities)
 

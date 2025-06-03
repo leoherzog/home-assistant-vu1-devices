@@ -6,7 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .config_entities import VU1BoundEntitySelect, VU1UpdateModeSelect
+from .config_entities import VU1UpdateModeSelect
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,9 +27,8 @@ async def async_setup_entry(
     dials_data = coordinator.data.get("dials", {})
     
     for dial_uid, dial_data in dials_data.items():
-        entities.extend([
-            VU1BoundEntitySelect(coordinator, dial_uid, dial_data),
-            VU1UpdateModeSelect(coordinator, dial_uid, dial_data),
-        ])
+        # Note: Update mode is now managed via config flow
+        # Keep this select for device control convenience
+        entities.append(VU1UpdateModeSelect(coordinator, dial_uid, dial_data))
 
     async_add_entities(entities)
