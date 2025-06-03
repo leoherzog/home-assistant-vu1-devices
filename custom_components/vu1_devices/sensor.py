@@ -31,8 +31,9 @@ async def async_setup_entry(
     entities = []
     
     # Create sensor entities for each dial
-    for dial_uid, dial_data in coordinator.data.items():
-        entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_data))
+    dial_data = coordinator.data.get("dials", {})
+    for dial_uid, dial_info in dial_data.items():
+        entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_info))
 
     async_add_entities(entities)
 
@@ -58,7 +59,7 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this VU1 dial."""
-        dial_data = self.coordinator.data.get(self._dial_uid, {})
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
         return DeviceInfo(
             identifiers={(DOMAIN, self._dial_uid)},
             name=dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
@@ -72,8 +73,9 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> Optional[int]:
         """Return the state of the sensor."""
-        dial_data = self.coordinator.data.get(self._dial_uid, {})
-        return dial_data.get("value")
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        detailed_status = dial_data.get("detailed_status", {})
+        return detailed_status.get("value")
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -104,15 +106,16 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return additional state attributes."""
-        dial_data = self.coordinator.data.get(self._dial_uid, {})
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
         
         attributes = {
             "dial_uid": self._dial_uid,
             "dial_name": dial_data.get("dial_name"),
         }
 
-        # Add backlight information
-        backlight = dial_data.get("backlight", {})
+        # Add backlight information from detailed status
+        detailed_status = dial_data.get("detailed_status", {})
+        backlight = detailed_status.get("backlight", {})
         if backlight:
             attributes.update({
                 "backlight_red": backlight.get("red"),
@@ -125,7 +128,6 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
             attributes["image_file"] = dial_data["image_file"]
 
         # Add detailed status if available
-        detailed_status = dial_data.get("detailed_status", {})
         if detailed_status:
             attributes["detailed_status"] = detailed_status
 

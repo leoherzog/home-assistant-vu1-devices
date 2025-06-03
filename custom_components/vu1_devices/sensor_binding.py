@@ -38,7 +38,8 @@ class VU1SensorBindingManager:
     async def async_update_bindings(self, coordinator_data: Dict[str, Any]) -> None:
         """Update bindings based on current dial configurations."""
         # Clean up old bindings for dials that no longer exist
-        existing_dials = set(coordinator_data.keys())
+        dial_data = coordinator_data.get("dials", {})
+        existing_dials = set(dial_data.keys())
         old_dials = set(self._bindings.keys()) - existing_dials
         
         for dial_uid in old_dials:
@@ -47,7 +48,7 @@ class VU1SensorBindingManager:
         # Update bindings for current dials
         for dial_uid in existing_dials:
             config = self._config_manager.get_dial_config(dial_uid)
-            await self._update_binding(dial_uid, config, coordinator_data[dial_uid])
+            await self._update_binding(dial_uid, config, dial_data[dial_uid])
 
     async def _update_binding(
         self, dial_uid: str, config: Dict[str, Any], dial_data: Dict[str, Any]

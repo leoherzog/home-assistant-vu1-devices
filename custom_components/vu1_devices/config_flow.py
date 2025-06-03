@@ -166,11 +166,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         description_placeholders = {}
         if self._discovery_method == "addon":
             if hasattr(self, '_discovered_ingress') and self._discovered_ingress:
-                description_placeholders["discovery_info"] = f"VU1 Server add-on auto-discovered with ingress enabled. This uses the internal Home Assistant proxy and doesn't require exposing ports."
+                description_placeholders["discovery_info"] = f"Discovered VU1 Server add-on via Ingress proxy."
             else:
                 description_placeholders["discovery_info"] = f"VU1 Server add-on auto-discovered at {self._discovered_host}:{self._discovered_port}. This uses the internal add-on network and doesn't require exposing ports."
         else:
-            description_placeholders["discovery_info"] = f"VU1 Server discovered at {self._discovered_host}:{self._discovered_port}. Verify the server is accessible and ports are properly configured."
+            description_placeholders["discovery_info"] = f"VU1 Server discovered at {self._discovered_host}:{self._discovered_port}."
 
         return self.async_show_form(
             step_id="discovery",
@@ -194,197 +194,29 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
         self.config_entry = config_entry
-        self._dials: list = []
-        self._selected_dial: Optional[str] = None
 
     async def async_step_init(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> FlowResult:
         """Manage the options."""
-        errors: Dict[str, str] = {}
-        
-        # Get dial list for configuration
-        try:
-            domain_data = self.hass.data.get(DOMAIN, {})
-            for entry_data in domain_data.values():
-                if "coordinator" in entry_data:
-                    coordinator = entry_data["coordinator"]
-                    if coordinator.data:
-                        self._dials = list(coordinator.data.values())
-                        break
-        except Exception as err:
-            _LOGGER.warning("Could not get dial list for options: %s", err)
-            self._dials = []
-
         if user_input is not None:
-            if "configure_dial" in user_input and user_input["configure_dial"]:
-                self._selected_dial = user_input["configure_dial"]
-                return await self.async_step_configure_dial()
-            
-            # Just update interval, no dial configuration
             return self.async_create_entry(title="", data=user_input)
 
-        # Build schema with dial selection if dials are available
-        schema_dict = {
+        # Simple options flow with just update interval
+        schema = vol.Schema({
             vol.Optional(
                 "update_interval",
                 default=self.config_entry.options.get("update_interval", 30),
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
-        }
-        
-        # Add dial configuration option if dials are available
-        if self._dials:
-            dial_options = {dial["uid"]: f"{dial.get('name', dial['uid'])} ({dial['uid']})" for dial in self._dials}
-            schema_dict[vol.Optional("configure_dial")] = vol.In(dial_options)
+        })
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(schema_dict),
-            errors=errors,
-        )
-    
-    async def async_step_configure_dial(
-        self, user_input: Optional[Dict[str, Any]] = None
-    ) -> FlowResult:
-        """Configure a specific dial."""
-        errors: Dict[str, str] = {}
-        
-        if not self._selected_dial:
-            return await self.async_step_init()
-        
-        # Get device configuration manager
-        try:
-            from .device_config import async_get_config_manager
-            config_manager = async_get_config_manager(self.hass)
-            current_config = config_manager.get_dial_config(self._selected_dial)
-        except Exception as err:
-            _LOGGER.error("Failed to get device config manager: %s", err)
-            errors["base"] = "config_error"
-            return await self.async_step_init()
-        
-        if user_input is not None:
-            try:
-                # Process user input to match expected format
-                processed_config = {
-                    "bound_entity": user_input.get("bound_entity") or None,
-                    "value_min": user_input.get("value_min", 0),
-                    "value_max": user_input.get("value_max", 100),
-                    "update_mode": user_input.get("update_mode", "manual"),
-                    "backlight_color": [
-                        user_input.get("backlight_red", 100),
-                        user_input.get("backlight_green", 100),
-                        user_input.get("backlight_blue", 100)
-                    ],
-                    "dial_easing": user_input.get("dial_easing", "linear"),
-                    "backlight_easing": user_input.get("backlight_easing", "linear"),
-                }
-                
-                # Update dial configuration
-                await config_manager.async_update_dial_config(self._selected_dial, processed_config)
-                
-                # Update sensor bindings if needed
-                from .sensor_binding import async_get_binding_manager
-                binding_manager = async_get_binding_manager(self.hass)
-                # Force refresh the binding for this dial
-                domain_data = self.hass.data.get(DOMAIN, {})
-                for entry_data in domain_data.values():
-                    if "coordinator" in entry_data:
-                        coordinator = entry_data["coordinator"]
-                        if coordinator.data and self._selected_dial in coordinator.data:
-                            await binding_manager._update_binding(
-                                self._selected_dial, 
-                                processed_config, 
-                                coordinator.data[self._selected_dial]
-                            )
-                            break
-                
-                return self.async_create_entry(title="", data=self.config_entry.options)
-                
-            except Exception as err:
-                _LOGGER.error("Failed to update dial configuration: %s", err)
-                errors["base"] = "config_update_failed"
-        
-        # Get available sensor entities for binding
-        entity_options = self._get_sensor_entities()
-        
-        # Get dial info for display
-        dial_info = next((dial for dial in self._dials if dial["uid"] == self._selected_dial), {})
-        dial_name = dial_info.get("name", self._selected_dial)
-        
-        # Build configuration schema
-        schema = vol.Schema({
-            vol.Optional(
-                "bound_entity", 
-                default=current_config.get("bound_entity")
-            ): vol.In(entity_options) if entity_options else cv.string,
-            vol.Optional(
-                "value_min", 
-                default=current_config.get("value_min", 0)
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1000)),
-            vol.Optional(
-                "value_max", 
-                default=current_config.get("value_max", 100)
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1000)),
-            vol.Optional(
-                "update_mode", 
-                default=current_config.get("update_mode", "manual")
-            ): vol.In({"automatic": "Automatic (sensor-driven)", "manual": "Manual only"}),
-            vol.Optional(
-                "backlight_red", 
-                default=current_config.get("backlight_color", [100, 100, 100])[0]
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Optional(
-                "backlight_green", 
-                default=current_config.get("backlight_color", [100, 100, 100])[1]
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Optional(
-                "backlight_blue", 
-                default=current_config.get("backlight_color", [100, 100, 100])[2]
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Optional(
-                "dial_easing", 
-                default=current_config.get("dial_easing", "linear")
-            ): vol.In({"linear": "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Ease In-Out"}),
-            vol.Optional(
-                "backlight_easing", 
-                default=current_config.get("backlight_easing", "linear")
-            ): vol.In({"linear": "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Ease In-Out"}),
-        })
-        
-        return self.async_show_form(
-            step_id="configure_dial",
             data_schema=schema,
-            errors=errors,
-            description_placeholders={"dial_name": dial_name},
+            description_placeholders={
+                "info": "Dial configuration is now available in device controls. Update interval controls how often dial values are refreshed."
+            },
         )
-    
-    def _get_sensor_entities(self) -> Dict[str, str]:
-        """Get available sensor entities for binding."""
-        import homeassistant.helpers.entity_registry as er
-        
-        entity_registry = er.async_get(self.hass)
-        entities = {}
-        
-        # Add "None" option for no binding
-        entities[""] = "None (no binding)"
-        
-        # Get entities from relevant domains
-        for entity in entity_registry.entities.values():
-            if entity.domain in ["sensor", "input_number", "number", "counter"]:
-                # Get state to show current value if available
-                state = self.hass.states.get(entity.entity_id)
-                display_name = entity.name or entity.entity_id
-                
-                if state and state.state not in ["unknown", "unavailable"]:
-                    try:
-                        float(state.state)
-                        display_name += f" (current: {state.state})"
-                    except (ValueError, TypeError):
-                        pass
-                
-                entities[entity.entity_id] = display_name
-        
-        return entities
 
 
 class CannotConnect(HomeAssistantError):
