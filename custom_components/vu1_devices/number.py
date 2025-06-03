@@ -12,6 +12,13 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 from .vu1_api import VU1APIClient
+from .config_entities import (
+    VU1ValueMinNumber,
+    VU1ValueMaxNumber,
+    VU1BacklightRedNumber,
+    VU1BacklightGreenNumber,
+    VU1BacklightBlueNumber,
+)
 
 if TYPE_CHECKING:
     from . import VU1DataUpdateCoordinator
@@ -32,8 +39,19 @@ async def async_setup_entry(
     entities = []
     
     # Create number entities for each dial
-    for dial_uid, dial_data in coordinator.data.items():
-        entities.append(VU1DialNumber(coordinator, client, dial_uid, dial_data))
+    dial_data = coordinator.data.get("dials", {})
+    for dial_uid, dial_info in dial_data.items():
+        # Add main dial control number
+        entities.append(VU1DialNumber(coordinator, client, dial_uid, dial_info))
+        
+        # Add configuration number entities
+        entities.extend([
+            VU1ValueMinNumber(coordinator, dial_uid, dial_info),
+            VU1ValueMaxNumber(coordinator, dial_uid, dial_info),
+            VU1BacklightRedNumber(coordinator, dial_uid, dial_info),
+            VU1BacklightGreenNumber(coordinator, dial_uid, dial_info),
+            VU1BacklightBlueNumber(coordinator, dial_uid, dial_info),
+        ])
 
     async_add_entities(entities)
 
@@ -64,7 +82,8 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this VU1 dial."""
-        dial_data = self.coordinator.data.get(self._dial_uid, {})
+        dials_data = self.coordinator.data.get("dials", {})
+        dial_data = dials_data.get(self._dial_uid, {})
         return DeviceInfo(
             identifiers={(DOMAIN, self._dial_uid)},
             name=dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
@@ -78,8 +97,10 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
     @property
     def native_value(self) -> Optional[float]:
         """Return the current value."""
-        dial_data = self.coordinator.data.get(self._dial_uid, {})
-        return dial_data.get("value")
+        dials_data = self.coordinator.data.get("dials", {})
+        dial_data = dials_data.get(self._dial_uid, {})
+        detailed_status = dial_data.get("detailed_status", {})
+        return detailed_status.get("value")
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the dial value."""
@@ -94,15 +115,17 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return additional state attributes."""
-        dial_data = self.coordinator.data.get(self._dial_uid, {})
+        dials_data = self.coordinator.data.get("dials", {})
+        dial_data = dials_data.get(self._dial_uid, {})
         
         attributes = {
             "dial_uid": self._dial_uid,
             "dial_name": dial_data.get("dial_name"),
         }
 
-        # Add backlight information
-        backlight = dial_data.get("backlight", {})
+        # Add backlight information from detailed status
+        detailed_status = dial_data.get("detailed_status", {})
+        backlight = detailed_status.get("backlight", {})
         if backlight:
             attributes.update({
                 "backlight_red": backlight.get("red"),

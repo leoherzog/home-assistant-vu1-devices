@@ -75,7 +75,8 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             if hasattr(self, '_binding_manager'):
                 await self._binding_manager.async_update_bindings(dial_data)
 
-            return dial_data
+            # Return data structure with dials
+            return {"dials": dial_data}
 
         except VU1APIError as err:
             raise UpdateFailed(f"Error communicating with VU1 server: {err}") from err
@@ -169,7 +170,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Initial binding update
     if coordinator.data:
-        await binding_manager.async_update_bindings(coordinator.data)
+        dials_data = coordinator.data.get("dials", {})
+        await binding_manager.async_update_bindings(dials_data)
 
     return True
 
@@ -213,7 +215,7 @@ def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tupl
     """Find the correct client and coordinator for a dial."""
     for data in hass.data[DOMAIN].values():
         coord = data["coordinator"]
-        if coord.data and dial_uid in coord.data:
+        if coord.data and dial_uid in coord.data.get("dials", {}):
             return data["client"], coord
     return None
 
