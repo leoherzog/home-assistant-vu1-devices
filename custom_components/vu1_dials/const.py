@@ -1,6 +1,6 @@
-"""Constants for the VU1 Devices integration."""
+"""Constants for the VU1 Dials integration."""
 
-DOMAIN = "vu1_devices"
+DOMAIN = "vu1_dials"
 
 # Configuration keys
 CONF_HOST = "host"

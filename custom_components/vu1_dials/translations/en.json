@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Set up VU1 Devices",
+        "title": "Set up VU1 Dials",
         "description": "Configure your VU1 server connection. {discovery_info}",
         "data": {
           "host": "Host",
@@ -36,7 +36,7 @@
     },
     "step": {
       "init": {
-        "title": "VU1 Devices Options",
+        "title": "VU1 Dials Options",
         "description": "Configure update interval and dial settings",
         "data": {
           "update_interval": "Update interval (seconds)",
