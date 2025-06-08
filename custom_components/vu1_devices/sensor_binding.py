@@ -222,6 +222,10 @@ class VU1SensorBindingManager:
 
     async def _get_client_for_dial(self, dial_uid: str) -> Optional[VU1APIClient]:
         """Get VU1 API client for a specific dial."""
+        # Check if domain data exists yet
+        if DOMAIN not in self.hass.data:
+            return None
+            
         # Find the config entry that contains this dial
         for entry_id, data in self.hass.data[DOMAIN].items():
             if isinstance(data, dict) and "coordinator" in data:
