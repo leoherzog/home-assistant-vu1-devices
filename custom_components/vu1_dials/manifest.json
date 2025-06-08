@@ -1,6 +1,6 @@
 {
-  "domain": "vu1_devices",
-  "name": "Streacom VU1 Devices",
+  "domain": "vu1_dials",
+  "name": "Streacom VU1 Dials",
   "version": "0.0.1",
   "homeassistant": "2023.3.0",
   "documentation": "https://github.com/leoherzog/home-assistant-vu1-devices",

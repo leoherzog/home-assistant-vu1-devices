@@ -1,4 +1,4 @@
-# Home Assistant Streacom VU1 Devices Integration
+# Home Assistant Streacom VU1 Dials Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 
@@ -33,12 +33,12 @@ A Home Assistant custom integration for Streacom VU1 eInk dials. This integratio
    - Go to HACS > Integrations > Three dots menu > Custom repositories
    - Repository: `leoherzog/home-assistant-vu1-devices`
    - Category: `Integration`
-3. Click "Install" on the "Streacom VU1 Devices" integration
+3. Click "Install" on the "Streacom VU1 Dials" integration
 4. Restart Home Assistant
 
 ### Manual Installation
 
-1. Copy the `custom_components/vu1_devices` folder to your Home Assistant `custom_components` directory
+1. Copy the `custom_components/vu1_dials` folder to your Home Assistant `custom_components` directory
 2. Restart Home Assistant
 
 ## Configuration
@@ -47,7 +47,7 @@ A Home Assistant custom integration for Streacom VU1 eInk dials. This integratio
 
 1. Go to **Settings** > **Devices & Services**
 2. Click **"+ Add Integration"**
-3. Search for **"Streacom VU1 Devices"**
+3. Search for **"Streacom VU1 Dials"**
 4. The integration will attempt to auto-discover a VU1 server on `localhost:5340`
 5. If discovered, confirm the host/port and enter your API key
 6. If not discovered, manually enter:
@@ -76,21 +76,21 @@ Each VU1 dial becomes a sensor entity in Home Assistant:
 
 ### Services
 
-#### `vu1_devices.set_dial_value`
+#### `vu1_dials.set_dial_value`
 Set the dial needle position (0-100%).
 
 ```yaml
-service: vu1_devices.set_dial_value
+service: vu1_dials.set_dial_value
 data:
   dial_uid: "590056000650564139323920"
   value: 75
 ```
 
-#### `vu1_devices.set_dial_backlight`
+#### `vu1_dials.set_dial_backlight`
 Set the RGB backlight color (0-100% for each channel).
 
 ```yaml
-service: vu1_devices.set_dial_backlight
+service: vu1_dials.set_dial_backlight
 data:
   dial_uid: "590056000650564139323920"
   red: 50
@@ -102,7 +102,7 @@ data:
 Change the display name of a dial.
 
 ```yaml
-service: vu1_devices.set_dial_name
+service: vu1_dials.set_dial_name
 data:
   dial_uid: "590056000650564139323920"
   name: "CPU Usage"
@@ -112,7 +112,7 @@ data:
 Reload dial configuration from the server.
 
 ```yaml
-service: vu1_devices.reload_dial
+service: vu1_dials.reload_dial
 data:
   dial_uid: "590056000650564139323920"
 ```
@@ -121,7 +121,7 @@ data:
 Calibrate the dial hardware.
 
 ```yaml
-service: vu1_devices.calibrate_dial
+service: vu1_dials.calibrate_dial
 data:
   dial_uid: "590056000650564139323920"
 ```
@@ -136,7 +136,7 @@ automation:
       - platform: state
         entity_id: sensor.processor_use
     action:
-      - service: vu1_devices.set_dial_value
+      - service: vu1_dials.set_dial_value
         data:
           dial_uid: "590056000650564139323920"
           value: "{{ states('sensor.processor_use') | int }}"
@@ -150,11 +150,11 @@ automation:
       - platform: state
         entity_id: sensor.cpu_temperature
     action:
-      - service: vu1_devices.set_dial_value
+      - service: vu1_dials.set_dial_value
         data:
           dial_uid: "590056000650564139323920"
           value: "{{ ((states('sensor.cpu_temperature') | float - 30) / 70 * 100) | round }}"
-      - service: vu1_devices.set_dial_backlight
+      - service: vu1_dials.set_dial_backlight
         data:
           dial_uid: "590056000650564139323920"
           red: "{{ 100 if states('sensor.cpu_temperature') | float > 70 else 0 }}"

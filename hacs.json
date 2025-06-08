@@ -1,5 +1,5 @@
 {
-  "name": "Streacom VU1 Devices",
+  "name": "Streacom VU1 Dials",
   "render_readme": true,
   "homeassistant": "2023.3.0",
   "hacs": "2.0.1"
