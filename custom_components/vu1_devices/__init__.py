@@ -60,26 +60,39 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         try:
             dials = await self.client.get_dial_list()
             
+            if not isinstance(dials, list):
+                _LOGGER.error("Unexpected dial list format: %s", type(dials))
+                raise UpdateFailed("Invalid dial list format")
+            
             # Get detailed status for each dial
             dial_data = {}
             for dial in dials:
+                if not isinstance(dial, dict) or "uid" not in dial:
+                    _LOGGER.warning("Invalid dial data: %s", dial)
+                    continue
+                    
                 dial_uid = dial["uid"]
                 try:
                     status = await self.client.get_dial_status(dial_uid)
                     dial_data[dial_uid] = {**dial, "detailed_status": status}
                 except VU1APIError as err:
                     _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, err)
-                    dial_data[dial_uid] = dial
+                    # Still include the dial with basic info
+                    dial_data[dial_uid] = {**dial, "detailed_status": {}}
 
             # Update sensor bindings when data changes
-            if hasattr(self, '_binding_manager'):
-                await self._binding_manager.async_update_bindings(dial_data)
+            if hasattr(self, '_binding_manager') and self._binding_manager:
+                await self._binding_manager.async_update_bindings({"dials": dial_data})
 
             # Return data structure with dials
             return {"dials": dial_data}
 
         except VU1APIError as err:
+            _LOGGER.error("VU1 API error: %s", err)
             raise UpdateFailed(f"Error communicating with VU1 server: {err}") from err
+        except Exception as err:
+            _LOGGER.exception("Unexpected error updating VU1 data")
+            raise UpdateFailed(f"Unexpected error: {err}") from err
     
     def set_binding_manager(self, binding_manager) -> None:
         """Set the binding manager reference."""
@@ -126,7 +139,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = VU1DataUpdateCoordinator(hass, client, update_interval)
 
-    # Fetch initial data
+    # Set up device configuration manager
+    from .device_config import async_get_config_manager
+    config_manager = async_get_config_manager(hass)
+    await config_manager.async_load()
+    
+    # Set up sensor binding manager BEFORE first refresh
+    from .sensor_binding import async_get_binding_manager
+    binding_manager = async_get_binding_manager(hass)
+    await binding_manager.async_setup()
+    
+    # Connect binding manager to coordinator BEFORE first refresh
+    coordinator.set_binding_manager(binding_manager)
+    
+    # NOW fetch initial data
     await coordinator.async_config_entry_first_refresh()
 
     # Register the VU1 server as a device
@@ -145,19 +171,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "client": client,
         "coordinator": coordinator,
     }
-
-    # Set up device configuration manager
-    from .device_config import async_get_config_manager
-    config_manager = async_get_config_manager(hass)
-    await config_manager.async_load()
-    
-    # Set up sensor binding manager
-    from .sensor_binding import async_get_binding_manager
-    binding_manager = async_get_binding_manager(hass)
-    await binding_manager.async_setup()
-    
-    # Connect binding manager to coordinator
-    coordinator.set_binding_manager(binding_manager)
     
     # Add binding manager to data for coordinator access
     hass.data[DOMAIN][entry.entry_id]["binding_manager"] = binding_manager

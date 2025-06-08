@@ -67,10 +67,14 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this VU1 dial."""
-        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        dial_name = f"VU1 Dial {self._dial_uid}"
+        if self.coordinator.data:
+            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+            dial_name = dial_data.get("dial_name", dial_name)
+        
         return DeviceInfo(
             identifiers={(DOMAIN, self._dial_uid)},
-            name=dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
+            name=dial_name,
             manufacturer=MANUFACTURER,
             model=MODEL,
             sw_version="1.0",
@@ -81,7 +85,15 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> Optional[int]:
         """Return the state of the sensor."""
+        if not self.coordinator.data:
+            _LOGGER.debug("No coordinator data available for %s", self._dial_uid)
+            return None
+            
         dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        if not dial_data:
+            _LOGGER.debug("No dial data for %s", self._dial_uid)
+            return None
+            
         detailed_status = dial_data.get("detailed_status", {})
         return detailed_status.get("value")
 
@@ -114,12 +126,20 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return additional state attributes."""
-        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-        
         attributes = {
             "dial_uid": self._dial_uid,
-            "dial_name": dial_data.get("dial_name"),
         }
+        
+        if not self.coordinator.data:
+            _LOGGER.debug("No coordinator data available for attributes on %s", self._dial_uid)
+            return attributes
+            
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        if not dial_data:
+            _LOGGER.debug("No dial data available for attributes on %s", self._dial_uid)
+            return attributes
+        
+        attributes["dial_name"] = dial_data.get("dial_name")
 
         # Add backlight information from detailed status
         detailed_status = dial_data.get("detailed_status", {})

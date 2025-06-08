@@ -227,7 +227,7 @@ class VU1SensorBindingManager:
             if isinstance(data, dict) and "coordinator" in data:
                 coordinator = data["coordinator"]
                 if coordinator.data and dial_uid in coordinator.data.get("dials", {}):
-                     return data["client"]
+                    return data["client"]
         return None
 
     async def async_shutdown(self) -> None:
