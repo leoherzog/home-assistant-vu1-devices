@@ -375,17 +375,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
         if user_input is not None:
             try:
-                # Convert RGB color from 0-255 to 0-100 range
-                backlight_rgb = user_input.get("backlight_color", [255, 255, 255])
-                backlight_color = [int((c / 255) * 100) for c in backlight_rgb]
-                
                 # Merge with mode from previous step
                 processed_config = {
                     "update_mode": "automatic",
                     "bound_entity": user_input.get("bound_entity") or None,
                     "value_min": user_input.get("value_min", 0),
                     "value_max": user_input.get("value_max", 100),
-                    "backlight_color": backlight_color,
                 }
                 
                 await config_manager.async_update_dial_config(self._selected_dial, processed_config)
@@ -421,10 +416,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             multiple=False,
         )
 
-        # Convert backlight color from 0-100 to 0-255 for color selector
-        current_backlight = current_config.get("backlight_color", [100, 100, 100])
-        default_rgb = [int((c / 100) * 255) for c in current_backlight]
-
         # Automatic mode schema with sensor binding
         schema = vol.Schema({
             vol.Required(
@@ -439,10 +430,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 "value_max", 
                 default=current_config.get("value_max", 100)
             ): vol.All(vol.Coerce(float), vol.Range(min=-1000, max=1000)),
-            vol.Optional(
-                "backlight_color",
-                default=default_rgb
-            ): selector.ColorRGBSelector(),
         })
 
         return self.async_show_form(
@@ -451,92 +438,49 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={
                 "dial_name": dial_name,
-                "info": "Select a sensor to bind to this dial and configure backlight color. The sensor's value will be mapped from the specified range to 0-100% on the dial."
+                "info": "Select a sensor to bind to this dial. The sensor's value will be mapped from the specified range to 0-100% on the dial."
             },
         )
 
     async def async_step_configure_manual(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> FlowResult:
-        """Configure manual mode with backlight color."""
-        errors: Dict[str, str] = {}
-        
+        """Configure manual mode (just saves the mode)."""
         if not self._selected_dial:
             return await self.async_step_init()
-        
-        # Get current configuration
+            
         try:
             from .device_config import async_get_config_manager
             config_manager = async_get_config_manager(self.hass)
-            current_config = config_manager.get_dial_config(self._selected_dial)
+            
+            # Save manual mode configuration
+            processed_config = {
+                "update_mode": "manual",
+                "bound_entity": None,
+                "value_min": 0,
+                "value_max": 100,
+            }
+            
+            await config_manager.async_update_dial_config(self._selected_dial, processed_config)
+            
+            # Update sensor bindings (clears any existing binding)
+            from .sensor_binding import async_get_binding_manager
+            binding_manager = async_get_binding_manager(self.hass)
+            coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+            if coordinator.data:
+                dials_data = coordinator.data.get("dials", {})
+                if self._selected_dial in dials_data:
+                    await binding_manager._update_binding(
+                        self._selected_dial, 
+                        processed_config, 
+                        dials_data[self._selected_dial]
+                    )
+            
+            return self.async_create_entry(title="", data=self.config_entry.options)
+            
         except Exception as err:
-            _LOGGER.error("Failed to get device config manager: %s", err)
-            errors["base"] = "config_error"
-            return await self.async_step_configure_dial()
-
-        if user_input is not None:
-            try:
-                # Convert RGB color from 0-255 to 0-100 range
-                backlight_rgb = user_input.get("backlight_color", [255, 255, 255])
-                backlight_color = [int((c / 255) * 100) for c in backlight_rgb]
-                
-                # Save manual mode configuration
-                processed_config = {
-                    "update_mode": "manual",
-                    "bound_entity": None,
-                    "value_min": 0,
-                    "value_max": 100,
-                    "backlight_color": backlight_color,
-                }
-                
-                await config_manager.async_update_dial_config(self._selected_dial, processed_config)
-                
-                # Update sensor bindings (clears any existing binding)
-                from .sensor_binding import async_get_binding_manager
-                binding_manager = async_get_binding_manager(self.hass)
-                coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-                if coordinator.data:
-                    dials_data = coordinator.data.get("dials", {})
-                    if self._selected_dial in dials_data:
-                        await binding_manager._update_binding(
-                            self._selected_dial, 
-                            processed_config, 
-                            dials_data[self._selected_dial]
-                        )
-                
-                return self.async_create_entry(title="", data=self.config_entry.options)
-                
-            except Exception as err:
-                _LOGGER.error("Failed to update dial configuration: %s", err)
-                errors["base"] = "config_update_failed"
-
-        # Get dial info for display
-        coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-        dials_data = coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._selected_dial, {})
-        dial_name = dial_data.get("dial_name", self._selected_dial)
-
-        # Convert backlight color from 0-100 to 0-255 for color selector
-        current_backlight = current_config.get("backlight_color", [100, 100, 100])
-        default_rgb = [int((c / 100) * 255) for c in current_backlight]
-
-        # Manual mode schema with backlight color
-        schema = vol.Schema({
-            vol.Optional(
-                "backlight_color",
-                default=default_rgb
-            ): selector.ColorRGBSelector(),
-        })
-
-        return self.async_show_form(
-            step_id="configure_manual",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={
-                "dial_name": dial_name,
-                "info": "Configure backlight color for manual control mode. Use services or device controls to update dial values."
-            },
-        )
+            _LOGGER.error("Failed to update dial configuration: %s", err)
+            return self.async_abort(reason="config_update_failed")
 
 
 class CannotConnect(HomeAssistantError):
