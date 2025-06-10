@@ -409,6 +409,33 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         self._attr_name = "Update mode"
         self._attr_icon = "mdi:update"
 
+    async def async_added_to_hass(self) -> None:
+        """Register for configuration change notifications."""
+        await super().async_added_to_hass()
+        
+        # Register as a listener for configuration changes
+        config_manager = async_get_config_manager(self.hass)
+        config_manager.async_add_listener(self._dial_uid, self._on_config_change)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister from configuration change notifications."""
+        await super().async_will_remove_from_hass()
+        
+        # Unregister as a listener
+        config_manager = async_get_config_manager(self.hass)
+        config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
+
+    async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
+        """Handle configuration changes."""
+        if dial_uid == self._dial_uid:
+            # Trigger immediate state update
+            self.async_schedule_update_ha_state()
+
+    @property
+    def should_poll(self) -> bool:
+        """No polling needed, we rely on coordinator updates."""
+        return False
+
     @property
     def native_value(self) -> str:
         """Return the current update mode."""
@@ -452,6 +479,33 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         self._attr_name = "Bound entity"
         self._attr_icon = "mdi:link"
 
+    async def async_added_to_hass(self) -> None:
+        """Register for configuration change notifications."""
+        await super().async_added_to_hass()
+        
+        # Register as a listener for configuration changes
+        config_manager = async_get_config_manager(self.hass)
+        config_manager.async_add_listener(self._dial_uid, self._on_config_change)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister from configuration change notifications."""
+        await super().async_will_remove_from_hass()
+        
+        # Unregister as a listener
+        config_manager = async_get_config_manager(self.hass)
+        config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
+
+    async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
+        """Handle configuration changes."""
+        if dial_uid == self._dial_uid:
+            # Trigger immediate state update
+            self.async_schedule_update_ha_state()
+
+    @property
+    def should_poll(self) -> bool:
+        """No polling needed, we rely on coordinator updates."""
+        return False
+
     @property
     def native_value(self) -> str:
         """Return the currently bound entity."""
@@ -462,7 +516,7 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         config = config_manager.get_dial_config(self._dial_uid)
         
         if config.get("update_mode") != "automatic":
-            return "Manual mode"
+            return "Manual Update Mode"
             
         bound_entity = config.get("bound_entity")
         if not bound_entity:
