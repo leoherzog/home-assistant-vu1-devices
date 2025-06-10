@@ -241,10 +241,15 @@ async def _execute_dial_service(
     refresh: bool = True
 ) -> None:
     """Execute a dial service with common error handling."""
+    # Validate dial_uid is not empty
+    if not dial_uid or not isinstance(dial_uid, str):
+        _LOGGER.error("Invalid dial_uid provided: %s", dial_uid)
+        raise ValueError(f"Invalid dial_uid: {dial_uid}")
+    
     result = _get_dial_client_and_coordinator(hass, dial_uid)
     if not result:
         _LOGGER.error("Dial %s not found", dial_uid)
-        return
+        raise ValueError(f"Dial {dial_uid} not found")
     
     client, coordinator = result
     try:
@@ -253,6 +258,10 @@ async def _execute_dial_service(
             await coordinator.async_request_refresh()
     except VU1APIError as err:
         _LOGGER.error("Failed to %s for %s: %s", action_name, dial_uid, err)
+        raise
+    except Exception as err:
+        _LOGGER.error("Unexpected error during %s for %s: %s", action_name, dial_uid, err)
+        raise
 
 
 async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> None:

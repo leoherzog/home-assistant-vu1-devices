@@ -43,6 +43,11 @@ class VU1APIClient:
         self._session = session
         self._close_session = False
 
+    def _validate_dial_uid(self, dial_uid: str) -> None:
+        """Validate dial_uid parameter."""
+        if not dial_uid or not isinstance(dial_uid, str):
+            raise ValueError("dial_uid must be a non-empty string")
+
     @property
     def session(self) -> aiohttp.ClientSession:
         """Get aiohttp session."""
@@ -164,6 +169,7 @@ class VU1APIClient:
 
     async def set_dial_value(self, dial_uid: str, value: int) -> None:
         """Set dial value (0-100)."""
+        self._validate_dial_uid(dial_uid)
         if not 0 <= value <= 100:
             raise ValueError("Value must be between 0 and 100")
         
@@ -173,6 +179,7 @@ class VU1APIClient:
         self, dial_uid: str, red: int, green: int, blue: int
     ) -> None:
         """Set dial backlight RGB values (0-100 each)."""
+        self._validate_dial_uid(dial_uid)
         for color, val in [("red", red), ("green", green), ("blue", blue)]:
             if not 0 <= val <= 100:
                 raise ValueError(f"{color} value must be between 0 and 100")
@@ -185,15 +192,20 @@ class VU1APIClient:
 
     async def get_dial_status(self, dial_uid: str) -> Dict[str, Any]:
         """Get dial status."""
+        self._validate_dial_uid(dial_uid)
         response = await self._request("GET", f"api/v0/dial/{dial_uid}/status")
         return response.get("data", {})
 
     async def set_dial_name(self, dial_uid: str, name: str) -> None:
         """Set dial name."""
+        self._validate_dial_uid(dial_uid)
+        if not name or not isinstance(name, str):
+            raise ValueError("name must be a non-empty string")
         await self._request("GET", f"api/v0/dial/{dial_uid}/name", {"name": name})
 
     async def get_dial_image(self, dial_uid: str) -> bytes:
         """Get dial background image."""
+        self._validate_dial_uid(dial_uid)
         response = await self._request("GET", f"api/v0/dial/{dial_uid}/image/get")
         return response.get("data", b"")
 
@@ -206,22 +218,27 @@ class VU1APIClient:
 
     async def reload_dial(self, dial_uid: str) -> None:
         """Reload dial configuration."""
+        self._validate_dial_uid(dial_uid)
         await self._request("GET", f"api/v0/dial/{dial_uid}/reload")
 
     async def calibrate_dial(self, dial_uid: str, value: int = 1024) -> None:
         """Calibrate dial to specific value."""
+        self._validate_dial_uid(dial_uid)
         await self._request("GET", f"api/v0/dial/{dial_uid}/calibrate", {"value": value})
 
     async def set_dial_easing(self, dial_uid: str, period: int, step: int) -> None:
         """Set dial easing configuration."""
+        self._validate_dial_uid(dial_uid)
         await self._request("GET", f"api/v0/dial/{dial_uid}/easing/dial", {"period": period, "step": step})
 
     async def set_backlight_easing(self, dial_uid: str, period: int, step: int) -> None:
         """Set backlight easing configuration."""
+        self._validate_dial_uid(dial_uid)
         await self._request("GET", f"api/v0/dial/{dial_uid}/easing/backlight", {"period": period, "step": step})
 
     async def get_easing_options(self, dial_uid: str) -> Dict[str, Any]:
         """Get available easing options."""
+        self._validate_dial_uid(dial_uid)
         response = await self._request("GET", f"api/v0/dial/{dial_uid}/easing/get")
         return response.get("data", {})
 
