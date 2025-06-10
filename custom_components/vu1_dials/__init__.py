@@ -152,10 +152,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Connect binding manager to coordinator BEFORE first refresh
     coordinator.set_binding_manager(binding_manager)
     
-    # NOW fetch initial data
-    await coordinator.async_config_entry_first_refresh()
-
-    # Register the VU1 server as a device
+    # Register the VU1 server as a device BEFORE setting up platforms
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
@@ -165,6 +162,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         name=f"VU1 Server ({connection_info})",
         sw_version="1.0",
     )
+
+    # NOW fetch initial data
+    await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
