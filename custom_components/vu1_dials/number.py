@@ -15,9 +15,6 @@ from .vu1_api import VU1APIClient
 from .config_entities import (
     VU1ValueMinNumber,
     VU1ValueMaxNumber,
-    VU1BacklightRedNumber,
-    VU1BacklightGreenNumber,
-    VU1BacklightBlueNumber,
     VU1DialEasingPeriodNumber,
     VU1DialEasingStepNumber,
     VU1BacklightEasingPeriodNumber,
@@ -52,9 +49,6 @@ async def async_setup_entry(
         entities.extend([
             VU1ValueMinNumber(coordinator, dial_uid, dial_info),
             VU1ValueMaxNumber(coordinator, dial_uid, dial_info),
-            VU1BacklightRedNumber(coordinator, dial_uid, dial_info),
-            VU1BacklightGreenNumber(coordinator, dial_uid, dial_info),
-            VU1BacklightBlueNumber(coordinator, dial_uid, dial_info),
             VU1DialEasingPeriodNumber(coordinator, dial_uid, dial_info),
             VU1DialEasingStepNumber(coordinator, dial_uid, dial_info),
             VU1BacklightEasingPeriodNumber(coordinator, dial_uid, dial_info),
@@ -108,7 +102,8 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
         detailed_status = dial_data.get("detailed_status", {})
-        return detailed_status.get("value")
+        value = detailed_status.get("value")
+        return float(value) if value is not None else 0.0
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the dial value."""

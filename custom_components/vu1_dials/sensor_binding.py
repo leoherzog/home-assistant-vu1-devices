@@ -82,7 +82,7 @@ class VU1SensorBindingManager:
             return
 
         # Get client for this dial
-        client = await self._get_client_for_dial(dial_uid)
+        client = self._get_client_for_dial(dial_uid)
         if not client:
             _LOGGER.error("No client found for dial %s", dial_uid)
             return
@@ -220,7 +220,7 @@ class VU1SensorBindingManager:
         
         return max(0, min(100, dial_value))
 
-    async def _get_client_for_dial(self, dial_uid: str) -> Optional[VU1APIClient]:
+    def _get_client_for_dial(self, dial_uid: str) -> Optional[VU1APIClient]:
         """Get VU1 API client for a specific dial."""
         # Check if domain data exists yet
         if DOMAIN not in self.hass.data:
