@@ -22,7 +22,7 @@ DEFAULT_PORT = 5340
 DEFAULT_UPDATE_INTERVAL = 30
 
 # Platforms
-PLATFORMS = ["sensor", "number", "select", "switch", "text"]
+PLATFORMS = ["sensor", "number", "switch", "text"]
 
 # Services
 SERVICE_SET_DIAL_VALUE = "set_dial_value"
