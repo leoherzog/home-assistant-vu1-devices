@@ -96,7 +96,7 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
             model=MODEL,
             sw_version="1.0",
             # Add via_device to link to the VU1 server hub
-            via_device=(DOMAIN, f"vu1_server_{self._client.host}_{self._client.port}"),
+            via_device=(DOMAIN, self.coordinator.server_device_id),
         )
 
     @property

@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -57,6 +57,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         self._previous_dial_names: Dict[str, str] = {}
         self._name_change_grace_periods: Dict[str, datetime] = {}
         self._grace_period_seconds = 10
+        self.server_device_id: Optional[str] = None
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from VU1 server."""
@@ -274,6 +275,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     coordinator = VU1DataUpdateCoordinator(hass, client, update_interval)
+    coordinator.server_device_id = device_identifier
 
     # Set up device configuration manager
     from .device_config import async_get_config_manager
