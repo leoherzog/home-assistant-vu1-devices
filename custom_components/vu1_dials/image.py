@@ -3,7 +3,9 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from homeassistant.components.image import ImageEntity
+# Temporarily remove ImageEntity inheritance to fix initialization issues
+# from homeassistant.components.image import ImageEntity
+from homeassistant.helpers.entity import Entity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -36,11 +38,12 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class VU1DialBackgroundImage(ImageEntity, CoordinatorEntity):
+class VU1DialBackgroundImage(CoordinatorEntity):
     """Image entity showing the current background image of a VU1 dial."""
 
     def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: Dict[str, Any]) -> None:
         """Initialize the dial background image entity."""
+        # Initialize CoordinatorEntity first (standard HA pattern)
         super().__init__(coordinator)
         self._client = client
         self._dial_uid = dial_uid
@@ -48,6 +51,8 @@ class VU1DialBackgroundImage(ImageEntity, CoordinatorEntity):
         self._attr_name = "Background image"
         self._attr_has_entity_name = True
         self._attr_icon = "mdi:image"
+        # Set device class to indicate this is an image-related entity
+        self._attr_device_class = "image"
         self._cached_image: Optional[bytes] = None
         self._last_image_file: Optional[str] = None
         self._image_last_updated: Optional[datetime] = None
@@ -73,6 +78,15 @@ class VU1DialBackgroundImage(ImageEntity, CoordinatorEntity):
             and self._dial_uid in self.coordinator.data.get("dials", {})
         )
 
+    @property
+    def state(self) -> str:
+        """Return the state of the image entity."""
+        image_file = self._get_current_image_file()
+        if image_file:
+            # Extract just the filename for display
+            filename = image_file.replace("\\", "/").split("/")[-1]
+            return filename
+        return "No image"
 
     async def async_image(self) -> Optional[bytes]:
         """Return the current dial background image."""
