@@ -59,5 +59,18 @@
         }
       }
     }
+  },
+  "entity": {
+    "select": {
+      "behavior_preset": {
+        "name": "Dial behavior",
+        "state": {
+          "responsive": "Responsive",
+          "balanced": "Balanced", 
+          "smooth": "Smooth",
+          "custom": "Custom"
+        }
+      }
+    }
   }
 }
