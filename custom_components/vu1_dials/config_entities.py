@@ -10,6 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
 from .device_config import async_get_config_manager
@@ -67,11 +68,16 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         config_manager = async_get_config_manager(self.hass)
         current_config = config_manager.get_dial_config(self._dial_uid)
         new_config = {**current_config, **config_updates}
-        await config_manager.async_update_dial_config(self._dial_uid, new_config)
         
-        # Update sensor bindings
+        # Don't save locally until we've successfully applied to hardware
+        # This prevents config drift between HA and the device
+        
+        # Update sensor bindings first (this is local only)
         binding_manager = async_get_binding_manager(self.hass)
         await binding_manager._update_binding(self._dial_uid, new_config, self._dial_data)
+        
+        # Now save the configuration
+        await config_manager.async_update_dial_config(self._dial_uid, new_config)
         
         # If easing values changed, trigger behavior select update
         easing_keys = {
@@ -156,9 +162,6 @@ class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
         await self._update_config(value_max=value)
 
 
-
-
-
 class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for dial easing period."""
 
@@ -182,25 +185,37 @@ class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
+        # Apply to hardware first
+        await self._apply_easing_config_with_new_value(int(value), None)
+        # If successful, save config
         await self._update_config(dial_easing_period=int(value))
-        await self._apply_easing_config()
 
-    async def _apply_easing_config(self) -> None:
-        """Apply easing configuration to server."""
+    async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
+        """Apply easing configuration to server with specific new values."""
         from . import _get_dial_client_and_coordinator
+        
+        _LOGGER.debug("Attempting to apply dial easing config for %s", self._dial_uid)
         result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        if result:
-            client, coordinator = result
-            config_manager = async_get_config_manager(self.hass)
-            config = config_manager.get_dial_config(self._dial_uid)
-            try:
-                await client.set_dial_easing(
-                    self._dial_uid,
-                    config.get("dial_easing_period", 50),
-                    config.get("dial_easing_step", 5)
-                )
-            except Exception as err:
-                _LOGGER.error("Failed to set dial easing for %s: %s", self._dial_uid, err)
+        
+        if not result:
+            _LOGGER.error("Failed to get client/coordinator for dial %s - cannot apply easing config", self._dial_uid)
+            raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
+            
+        client, coordinator = result
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        # Use new values if provided, otherwise use current config
+        period = new_period if new_period is not None else config.get("dial_easing_period", 50)
+        step = new_step if new_step is not None else config.get("dial_easing_step", 5)
+        
+        try:
+            _LOGGER.info("Setting dial easing for %s: period=%d, step=%d", self._dial_uid, period, step)
+            await client.set_dial_easing(self._dial_uid, period, step)
+            await coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to set dial easing for %s: %s", self._dial_uid, err)
+            raise HomeAssistantError(f"Failed to apply dial easing: {err}")
 
 
 class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
@@ -226,25 +241,37 @@ class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
+        # Apply to hardware first
+        await self._apply_easing_config_with_new_value(None, int(value))
+        # If successful, save config
         await self._update_config(dial_easing_step=int(value))
-        await self._apply_easing_config()
 
-    async def _apply_easing_config(self) -> None:
-        """Apply easing configuration to server."""
+    async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
+        """Apply easing configuration to server with specific new values."""
         from . import _get_dial_client_and_coordinator
+        
+        _LOGGER.debug("Attempting to apply dial easing config for %s", self._dial_uid)
         result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        if result:
-            client, coordinator = result
-            config_manager = async_get_config_manager(self.hass)
-            config = config_manager.get_dial_config(self._dial_uid)
-            try:
-                await client.set_dial_easing(
-                    self._dial_uid,
-                    config.get("dial_easing_period", 50),
-                    config.get("dial_easing_step", 5)
-                )
-            except Exception as err:
-                _LOGGER.error("Failed to set dial easing for %s: %s", self._dial_uid, err)
+        
+        if not result:
+            _LOGGER.error("Failed to get client/coordinator for dial %s - cannot apply easing config", self._dial_uid)
+            raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
+            
+        client, coordinator = result
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        # Use new values if provided, otherwise use current config
+        period = new_period if new_period is not None else config.get("dial_easing_period", 50)
+        step = new_step if new_step is not None else config.get("dial_easing_step", 5)
+        
+        try:
+            _LOGGER.info("Setting dial easing for %s: period=%d, step=%d", self._dial_uid, period, step)
+            await client.set_dial_easing(self._dial_uid, period, step)
+            await coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to set dial easing for %s: %s", self._dial_uid, err)
+            raise HomeAssistantError(f"Failed to apply dial easing: {err}")
 
 
 class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
@@ -270,25 +297,37 @@ class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
+        # Apply to hardware first
+        await self._apply_easing_config_with_new_value(int(value), None)
+        # If successful, save config
         await self._update_config(backlight_easing_period=int(value))
-        await self._apply_easing_config()
 
-    async def _apply_easing_config(self) -> None:
-        """Apply easing configuration to server."""
+    async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
+        """Apply easing configuration to server with specific new values."""
         from . import _get_dial_client_and_coordinator
+        
+        _LOGGER.debug("Attempting to apply backlight easing config for %s", self._dial_uid)
         result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        if result:
-            client, coordinator = result
-            config_manager = async_get_config_manager(self.hass)
-            config = config_manager.get_dial_config(self._dial_uid)
-            try:
-                await client.set_backlight_easing(
-                    self._dial_uid,
-                    config.get("backlight_easing_period", 50),
-                    config.get("backlight_easing_step", 5)
-                )
-            except Exception as err:
-                _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
+        
+        if not result:
+            _LOGGER.error("Failed to get client/coordinator for dial %s - cannot apply easing config", self._dial_uid)
+            raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
+            
+        client, coordinator = result
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        # Use new values if provided, otherwise use current config
+        period = new_period if new_period is not None else config.get("backlight_easing_period", 50)
+        step = new_step if new_step is not None else config.get("backlight_easing_step", 5)
+        
+        try:
+            _LOGGER.info("Setting backlight easing for %s: period=%d, step=%d", self._dial_uid, period, step)
+            await client.set_backlight_easing(self._dial_uid, period, step)
+            await coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
+            raise HomeAssistantError(f"Failed to apply backlight easing: {err}")
 
 
 class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
@@ -314,25 +353,37 @@ class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
+        # Apply to hardware first
+        await self._apply_easing_config_with_new_value(None, int(value))
+        # If successful, save config
         await self._update_config(backlight_easing_step=int(value))
-        await self._apply_easing_config()
 
-    async def _apply_easing_config(self) -> None:
-        """Apply easing configuration to server."""
+    async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
+        """Apply easing configuration to server with specific new values."""
         from . import _get_dial_client_and_coordinator
+        
+        _LOGGER.debug("Attempting to apply backlight easing config for %s", self._dial_uid)
         result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        if result:
-            client, coordinator = result
-            config_manager = async_get_config_manager(self.hass)
-            config = config_manager.get_dial_config(self._dial_uid)
-            try:
-                await client.set_backlight_easing(
-                    self._dial_uid,
-                    config.get("backlight_easing_period", 50),
-                    config.get("backlight_easing_step", 5)
-                )
-            except Exception as err:
-                _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
+        
+        if not result:
+            _LOGGER.error("Failed to get client/coordinator for dial %s - cannot apply easing config", self._dial_uid)
+            raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
+            
+        client, coordinator = result
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        # Use new values if provided, otherwise use current config
+        period = new_period if new_period is not None else config.get("backlight_easing_period", 50)
+        step = new_step if new_step is not None else config.get("backlight_easing_step", 5)
+        
+        try:
+            _LOGGER.info("Setting backlight easing for %s: period=%d, step=%d", self._dial_uid, period, step)
+            await client.set_backlight_easing(self._dial_uid, period, step)
+            await coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
+            raise HomeAssistantError(f"Failed to apply backlight easing: {err}")
 
 
 class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
