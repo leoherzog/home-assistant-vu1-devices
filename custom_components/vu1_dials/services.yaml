@@ -1,6 +1,6 @@
 set_dial_value:
   name: Set Dial Value
-  description: Set the needle position of a VU1 dial (0-100%). Note: For automatic sensor binding, use the config flow instead of this service.
+  description: Set the needle position of a VU1 dial (0-100%). Note - For automatic sensor binding, use the config flow instead of this service.
   fields:
     dial_uid:
       name: Dial UID
@@ -22,7 +22,7 @@ set_dial_value:
 
 set_dial_backlight:
   name: Set Dial Backlight
-  description: Set the RGB backlight color of a VU1 dial. Tip: Use the light entity for a visual color picker interface instead.
+  description: Set the RGB backlight color of a VU1 dial. Tip - Use the light entity for a visual color picker interface instead.
   fields:
     dial_uid:
       name: Dial UID

@@ -1,5 +1,6 @@
 """Support for VU1 dial image entities."""
 import logging
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from homeassistant.components.image import ImageEntity
@@ -7,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .vu1_api import VU1APIClient
@@ -48,6 +50,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         self._attr_icon = "mdi:image"
         self._cached_image: Optional[bytes] = None
         self._last_image_file: Optional[str] = None
+        self._image_last_updated: Optional[datetime] = None
 
     @property
     def device_info(self) -> Dict[str, Any]:
@@ -93,6 +96,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
                 if image_data:
                     self._cached_image = image_data
                     self._last_image_file = current_image_file
+                    self._image_last_updated = dt_util.utcnow()
                     _LOGGER.debug("Successfully fetched image for dial %s (%d bytes)", 
                                 self._dial_uid, len(image_data))
                 else:
@@ -156,6 +160,11 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         
         return attributes
 
+    @property
+    def image_last_updated(self) -> Optional[datetime]:
+        """Return when the image was last updated."""
+        return self._image_last_updated
+
     async def async_update(self) -> None:
         """Update the image entity."""
         # Check if image has changed according to server
@@ -168,3 +177,4 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
                 _LOGGER.debug("Server indicates image changed for dial %s, clearing cache", self._dial_uid)
                 self._cached_image = None
                 self._last_image_file = None
+                self._image_last_updated = None

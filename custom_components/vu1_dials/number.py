@@ -150,14 +150,21 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
         if last_state is not None and last_state.state != "unknown":
             self._attr_native_value = float(last_state.state)
         
-        # Subscribe to device registry updates to track name changes
+        # Subscribe to device registry updates using event bus
+        from homeassistant.const import EVENT_DEVICE_REGISTRY_UPDATED
         device_registry = dr.async_get(self.hass)
         device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
+        
         if device:
-            self._device_registry_updated_unsub = dr.async_track_device_registry_updated_event(
-                self.hass,
-                device.id,
-                self._async_device_registry_updated
+            @callback
+            def device_registry_updated(event):
+                """Handle device registry update."""
+                if event.data.get("device_id") == device.id:
+                    self._async_device_registry_updated(event)
+            
+            self._device_registry_updated_unsub = self.hass.bus.async_listen(
+                EVENT_DEVICE_REGISTRY_UPDATED,
+                device_registry_updated
             )
 
     async def async_will_remove_from_hass(self) -> None:
