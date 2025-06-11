@@ -1,4 +1,4 @@
-"""The VU1 Devices integration."""
+"""The VU1 Dials integration."""
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -237,7 +237,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up VU1 Devices from a config entry."""
+    """Set up VU1 Dials from a config entry."""
     api_key = entry.data[CONF_API_KEY]
 
     # Create client based on connection type
