@@ -1,14 +1,14 @@
 """The VU1 Devices integration."""
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Dict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -54,6 +54,9 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=update_interval,
         )
         self.client = client
+        self._previous_dial_names: Dict[str, str] = {}
+        self._name_change_grace_periods: Dict[str, datetime] = {}
+        self._grace_period_seconds = 10
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from VU1 server."""
@@ -75,6 +78,12 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 try:
                     status = await self.client.get_dial_status(dial_uid)
                     dial_data[dial_uid] = {**dial, "detailed_status": status}
+                    
+                    # Check for server-side name changes
+                    server_name = dial.get("dial_name")
+                    if server_name is not None:
+                        await self._check_server_name_change(dial_uid, server_name)
+                    
                 except VU1APIError as err:
                     _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, err)
                     # Still include the dial with basic info
@@ -97,6 +106,84 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
     def set_binding_manager(self, binding_manager) -> None:
         """Set the binding manager reference."""
         self._binding_manager = binding_manager
+    
+    async def _check_server_name_change(self, dial_uid: str, server_name: str) -> None:
+        """Check if the server name has changed and sync to HA if needed."""
+        if not server_name:
+            return
+            
+        previous_name = self._previous_dial_names.get(dial_uid)
+        current_time = datetime.now()
+        
+        # Check if we're in a grace period (recently changed name from HA side)
+        grace_end = self._name_change_grace_periods.get(dial_uid)
+        if grace_end and current_time < grace_end:
+            _LOGGER.debug(
+                "Ignoring server name change for %s during grace period", dial_uid
+            )
+            return
+            
+        # If name changed on server, update HA
+        if previous_name and previous_name != server_name:
+            _LOGGER.info(
+                "Server name changed for %s: %s -> %s", 
+                dial_uid, previous_name, server_name
+            )
+            await self._update_ha_name(dial_uid, server_name)
+            
+        # Store current name for next comparison
+        self._previous_dial_names[dial_uid] = server_name
+        
+    async def _update_ha_name(self, dial_uid: str, new_name: str) -> None:
+        """Update entity and device names in Home Assistant."""
+        try:
+            # Update entity name
+            entity_registry = er.async_get(self.hass)
+            entity_id = entity_registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{DOMAIN}_{dial_uid}"
+            )
+            
+            if entity_id:
+                entity_entry = entity_registry.async_get(entity_id)
+                # Only update if not user-customized
+                if entity_entry and not entity_entry.name:
+                    entity_registry.async_update_entity(
+                        entity_id,
+                        original_name=new_name
+                    )
+                    _LOGGER.debug(
+                        "Updated entity original_name for %s to %s", 
+                        entity_id, new_name
+                    )
+            
+            # Update device name
+            device_registry = dr.async_get(self.hass)
+            device = device_registry.async_get_device(
+                identifiers={(DOMAIN, dial_uid)}
+            )
+            
+            if device and not device.name_by_user:
+                device_registry.async_update_device(
+                    device.id,
+                    name=new_name
+                )
+                _LOGGER.info(
+                    "Updated device name for %s to %s", dial_uid, new_name
+                )
+                
+        except Exception as err:
+            _LOGGER.error(
+                "Failed to update HA name for %s: %s", dial_uid, err
+            )
+            
+    def mark_name_change_from_ha(self, dial_uid: str) -> None:
+        """Mark that a name change originated from HA to prevent sync loops."""
+        grace_end = datetime.now() + timedelta(seconds=self._grace_period_seconds)
+        self._name_change_grace_periods[dial_uid] = grace_end
+        _LOGGER.debug(
+            "Started grace period for %s until %s", 
+            dial_uid, grace_end.isoformat()
+        )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -293,6 +380,12 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         """Set dial name service."""
         dial_uid = call.data[ATTR_DIAL_UID]
         name = call.data[ATTR_NAME]
+        
+        # Mark grace period to prevent sync loop
+        result = _get_dial_client_and_coordinator(hass, dial_uid)
+        if result:
+            _, coordinator = result
+            coordinator.mark_name_change_from_ha(dial_uid)
         
         await _execute_dial_service(
             hass, dial_uid, "set dial name",
