@@ -84,6 +84,9 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                     if server_name is not None:
                         await self._check_server_name_change(dial_uid, server_name)
                     
+                    # Check for server-side behavior preset changes
+                    await self._check_server_behavior_change(dial_uid, status)
+                    
                 except VU1APIError as err:
                     _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, err)
                     # Still include the dial with basic info
@@ -184,6 +187,52 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             "Started grace period for %s until %s", 
             dial_uid, grace_end.isoformat()
         )
+    
+    async def _check_server_behavior_change(self, dial_uid: str, status: Dict[str, Any]) -> None:
+        """Check if server behavior settings changed and sync to HA."""
+        if not status:
+            return
+            
+        # Extract easing settings from server status
+        easing_config = status.get("easing", {})
+        if not easing_config:
+            return
+            
+        # Get current HA configuration
+        from .device_config import async_get_config_manager
+        config_manager = async_get_config_manager(self.hass)
+        current_config = config_manager.get_dial_config(dial_uid)
+        
+        # Check if server values differ from HA config
+        # Convert string periods to int if needed
+        dial_period = easing_config.get("dial_period", 50)
+        if isinstance(dial_period, str):
+            dial_period = int(dial_period)
+        backlight_period = easing_config.get("backlight_period", 50)
+        if isinstance(backlight_period, str):
+            backlight_period = int(backlight_period)
+            
+        server_values = {
+            "dial_easing_period": dial_period,
+            "dial_easing_step": easing_config.get("dial_step", 5),
+            "backlight_easing_period": backlight_period,
+            "backlight_easing_step": easing_config.get("backlight_step", 5),
+        }
+        
+        config_changed = False
+        for key, server_value in server_values.items():
+            if current_config.get(key) != server_value:
+                config_changed = True
+                _LOGGER.info(
+                    "Server %s changed for %s: %s -> %s",
+                    key, dial_uid, current_config.get(key), server_value
+                )
+        
+        if config_changed:
+            # Update HA configuration to match server
+            updated_config = {**current_config, **server_values}
+            await config_manager.async_update_dial_config(dial_uid, updated_config)
+            _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

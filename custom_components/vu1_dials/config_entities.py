@@ -50,6 +50,31 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         # Update sensor bindings
         binding_manager = async_get_binding_manager(self.hass)
         await binding_manager._update_binding(self._dial_uid, new_config, self._dial_data)
+        
+        # If easing values changed, trigger behavior select update
+        easing_keys = {
+            "dial_easing_period", "dial_easing_step", 
+            "backlight_easing_period", "backlight_easing_step"
+        }
+        if any(key in config_updates for key in easing_keys):
+            await self._trigger_behavior_select_update()
+    
+    async def _trigger_behavior_select_update(self) -> None:
+        """Trigger behavior select entity to update its state."""
+        from homeassistant.helpers import entity_registry as er
+        
+        # Find the behavior select entity
+        entity_registry = er.async_get(self.hass)
+        behavior_entity_id = entity_registry.async_get_entity_id(
+            "select", DOMAIN, f"{self._dial_uid}_behavior_preset"
+        )
+        
+        if behavior_entity_id:
+            # Get the entity and trigger state update
+            behavior_entity = self.hass.data.get("entity_platform", {}).get(behavior_entity_id)
+            if hasattr(behavior_entity, "async_schedule_update_ha_state"):
+                behavior_entity.async_schedule_update_ha_state()
+                _LOGGER.debug("Triggered behavior select update for %s", self._dial_uid)
 
 
 class VU1ValueMinNumber(VU1ConfigEntityBase, NumberEntity):
