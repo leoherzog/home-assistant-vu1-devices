@@ -36,7 +36,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
+class VU1DialBackgroundImage(ImageEntity, CoordinatorEntity):
     """Image entity showing the current background image of a VU1 dial."""
 
     def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: Dict[str, Any]) -> None:
@@ -72,6 +72,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
             self.coordinator.last_update_success
             and self._dial_uid in self.coordinator.data.get("dials", {})
         )
+
 
     async def async_image(self) -> Optional[bytes]:
         """Return the current dial background image."""
