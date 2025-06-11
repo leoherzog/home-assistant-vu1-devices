@@ -4,7 +4,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -63,6 +64,9 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{DOMAIN}_{dial_uid}"
         self._attr_name = dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
         self._attr_has_entity_name = True
+        self._entity_registry_updated_unsub = None
+        self._device_registry_updated_unsub = None
+        self._last_known_name = self._attr_name
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -81,6 +85,86 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
             # Add via_device to link to the VU1 server hub
             via_device=(DOMAIN, f"vu1_server_{self._client.host}_{self._client.port}"),
         )
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to hass."""
+        await super().async_added_to_hass()
+        
+        # Subscribe to entity registry updates
+        self._entity_registry_updated_unsub = er.async_track_entity_registry_updated_event(
+            self.hass,
+            self.entity_id,
+            self._async_entity_registry_updated
+        )
+        
+        # Subscribe to device registry updates
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
+        if device:
+            self._device_registry_updated_unsub = dr.async_track_device_registry_updated_event(
+                self.hass,
+                device.id,
+                self._async_device_registry_updated
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """When entity will be removed from hass."""
+        await super().async_will_remove_from_hass()
+        
+        if self._entity_registry_updated_unsub:
+            self._entity_registry_updated_unsub()
+            
+        if self._device_registry_updated_unsub:
+            self._device_registry_updated_unsub()
+
+    @callback
+    def _async_entity_registry_updated(self, event) -> None:
+        """Handle entity registry update."""
+        registry = er.async_get(self.hass)
+        entity_entry = registry.async_get(self.entity_id)
+        
+        if entity_entry:
+            # Check if entity has a custom name or if it was reset to default
+            if entity_entry.name:
+                # Entity has a custom name set by user
+                new_name = entity_entry.name
+            else:
+                # Name was reset to default - use device name
+                device_registry = dr.async_get(self.hass)
+                device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
+                if device and device.name_by_user:
+                    new_name = device.name_by_user
+                else:
+                    # Fall back to server's dial name
+                    dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+                    new_name = dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}")
+            
+            if new_name != self._last_known_name:
+                self._last_known_name = new_name
+                self.hass.async_create_task(self._sync_name_to_server(new_name))
+
+    @callback
+    def _async_device_registry_updated(self, event) -> None:
+        """Handle device registry update."""
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get(event.data["device_id"])
+        
+        if device and device.name_by_user:
+            # Device has a custom name set by user
+            new_name = device.name_by_user
+            if new_name != self._last_known_name:
+                self._last_known_name = new_name
+                self.hass.async_create_task(self._sync_name_to_server(new_name))
+
+    async def _sync_name_to_server(self, name: str) -> None:
+        """Sync the entity name to the VU1 server."""
+        try:
+            await self._client.set_dial_name(self._dial_uid, name)
+            # Trigger coordinator refresh to update all related entities
+            await self.coordinator.async_request_refresh()
+            _LOGGER.info("Synced dial name '%s' to VU1 server for %s", name, self._dial_uid)
+        except Exception as err:
+            _LOGGER.error("Failed to sync dial name to server for %s: %s", self._dial_uid, err)
 
     @property
     def native_value(self) -> Optional[int]:
