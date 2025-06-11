@@ -315,6 +315,8 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         self._attr_unique_id = f"{dial_uid}_update_mode_status"
         self._attr_name = "Update mode"
         self._attr_icon = "mdi:update"
+        # Remove entity_category for sensor entities
+        self._attr_entity_category = None
 
     async def async_added_to_hass(self) -> None:
         """Register for configuration change notifications."""
@@ -385,6 +387,8 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         self._attr_unique_id = f"{dial_uid}_bound_entity_status"
         self._attr_name = "Bound entity"
         self._attr_icon = "mdi:link"
+        # Remove entity_category for sensor entities
+        self._attr_entity_category = None
 
     async def async_added_to_hass(self) -> None:
         """Register for configuration change notifications."""
