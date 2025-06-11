@@ -159,6 +159,9 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     async def _sync_name_to_server(self, name: str) -> None:
         """Sync the entity name to the VU1 server."""
         try:
+            # Mark grace period to prevent sync loop
+            self.coordinator.mark_name_change_from_ha(self._dial_uid)
+            
             await self._client.set_dial_name(self._dial_uid, name)
             # Trigger coordinator refresh to update all related entities
             await self.coordinator.async_request_refresh()
@@ -266,6 +269,9 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     async def async_set_dial_name(self, name: str) -> None:
         """Set the dial name."""
         try:
+            # Mark grace period to prevent sync loop
+            self.coordinator.mark_name_change_from_ha(self._dial_uid)
+            
             await self._client.set_dial_name(self._dial_uid, name)
             # Trigger coordinator refresh to update state
             await self.coordinator.async_request_refresh()
