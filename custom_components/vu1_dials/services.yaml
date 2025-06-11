@@ -1,17 +1,17 @@
 set_dial_value:
   name: Set Dial Value
-  description: Set the value of a VU1 dial (0-100%)
+  description: Set the needle position of a VU1 dial (0-100%). Note: For automatic sensor binding, use the config flow instead of this service.
   fields:
     dial_uid:
       name: Dial UID
-      description: The unique identifier of the dial
+      description: The unique identifier of the dial (found in dial attributes)
       required: true
       example: "590056000650564139323920"
       selector:
         text:
     value:
       name: Value
-      description: The value to set (0-100)
+      description: The dial value to set (0-100%)
       required: true
       example: 75
       selector:
@@ -22,18 +22,18 @@ set_dial_value:
 
 set_dial_backlight:
   name: Set Dial Backlight
-  description: Set the RGB backlight color of a VU1 dial
+  description: Set the RGB backlight color of a VU1 dial. Tip: Use the light entity for a visual color picker interface instead.
   fields:
     dial_uid:
       name: Dial UID
-      description: The unique identifier of the dial
+      description: The unique identifier of the dial (found in dial attributes)
       required: true
       example: "590056000650564139323920"
       selector:
         text:
     red:
       name: Red
-      description: Red color component (0-100)
+      description: Red color component (0-100%)
       required: true
       example: 50
       selector:
@@ -43,7 +43,7 @@ set_dial_backlight:
           unit_of_measurement: "%"
     green:
       name: Green
-      description: Green color component (0-100)
+      description: Green color component (0-100%)
       required: true
       example: 25
       selector:
@@ -53,7 +53,7 @@ set_dial_backlight:
           unit_of_measurement: "%"
     blue:
       name: Blue
-      description: Blue color component (0-100)
+      description: Blue color component (0-100%)
       required: true
       example: 75
       selector:
@@ -64,18 +64,18 @@ set_dial_backlight:
 
 set_dial_name:
   name: Set Dial Name
-  description: Set the display name of a VU1 dial
+  description: Set the display name of a VU1 dial. This will sync bidirectionally with Home Assistant entity names.
   fields:
     dial_uid:
       name: Dial UID
-      description: The unique identifier of the dial
+      description: The unique identifier of the dial (found in dial attributes)
       required: true
       example: "590056000650564139323920"
       selector:
         text:
     name:
       name: Name
-      description: The new name for the dial
+      description: The new display name for the dial
       required: true
       example: "CPU Usage"
       selector:
@@ -83,11 +83,11 @@ set_dial_name:
 
 reload_dial:
   name: Reload Dial
-  description: Reload the configuration of a VU1 dial
+  description: Reload hardware configuration and refresh information for a VU1 dial. Also available as a button entity for each dial.
   fields:
     dial_uid:
       name: Dial UID
-      description: The unique identifier of the dial
+      description: The unique identifier of the dial (found in dial attributes)
       required: true
       example: "590056000650564139323920"
       selector:
@@ -95,11 +95,11 @@ reload_dial:
 
 calibrate_dial:
   name: Calibrate Dial
-  description: Calibrate a VU1 dial
+  description: Perform hardware calibration for a VU1 dial. This will move the needle to calibrate its position.
   fields:
     dial_uid:
       name: Dial UID
-      description: The unique identifier of the dial
+      description: The unique identifier of the dial (found in dial attributes)
       required: true
       example: "590056000650564139323920"
       selector:

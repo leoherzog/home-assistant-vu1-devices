@@ -1,4 +1,4 @@
-"""Config flow for VU1 Devices integration."""
+"""Config flow for VU1 Dials integration."""
 import logging
 from typing import Any, Dict, Optional
 
@@ -25,7 +25,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for VU1 Devices."""
+    """Handle a config flow for VU1 Dials."""
 
     VERSION = 1
 
@@ -538,6 +538,6 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
 
     # Return info that you want to store in the config entry.
     return {
-        "title": f"VU1 Devices ({connection_info})",
+        "title": f"VU1 Dials ({connection_info})",
         "dial_count": len(dials),
     }

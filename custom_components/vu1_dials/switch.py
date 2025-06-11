@@ -1,4 +1,4 @@
-"""Switch platform for VU1 Devices."""
+"""Switch platform for VU1 Dials."""
 import logging
 from typing import Any, Dict
 
