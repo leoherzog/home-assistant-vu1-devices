@@ -4,7 +4,6 @@ from typing import Any, Dict, Optional
 
 from homeassistant.components.number import NumberEntity, NumberDeviceClass
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -104,35 +103,6 @@ class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
 
 
 
-
-class VU1DialNameText(VU1ConfigEntityBase, TextEntity):
-    """Text entity for dial name."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
-        """Initialize the dial name text."""
-        super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_dial_name"
-        self._attr_name = "Dial name"
-        self._attr_icon = "mdi:rename"
-        self._attr_max = 50
-
-    @property
-    def native_value(self) -> str:
-        """Return the current value."""
-        return self._dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}")
-
-    async def async_set_value(self, value: str) -> None:
-        """Update the value."""
-        # Update server via API
-        from . import _get_dial_client_and_coordinator
-        result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        if result:
-            client, coordinator = result
-            try:
-                await client.set_dial_name(self._dial_uid, value)
-                await coordinator.async_request_refresh()
-            except Exception as err:
-                _LOGGER.error("Failed to set dial name for %s: %s", self._dial_uid, err)
 
 
 class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
