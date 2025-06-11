@@ -47,10 +47,15 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
 
     async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
-        """Handle configuration changes."""
+        """Handle configuration changes from external sources."""
         if dial_uid == self._dial_uid:
-            # Trigger immediate state update
+            # Update local state from configuration and trigger UI update
+            await self._sync_from_config()
             self.async_schedule_update_ha_state()
+
+    async def _sync_from_config(self) -> None:
+        """Sync entity state from configuration. Override in subclasses."""
+        pass
 
     @property
     def device_info(self) -> Dict[str, Any]:
@@ -64,20 +69,19 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         }
 
     async def _update_config(self, **config_updates) -> None:
-        """Update dial configuration."""
+        """Update dial configuration with optimized sensor binding handling."""
         config_manager = async_get_config_manager(self.hass)
         current_config = config_manager.get_dial_config(self._dial_uid)
         new_config = {**current_config, **config_updates}
         
-        # Don't save locally until we've successfully applied to hardware
-        # This prevents config drift between HA and the device
-        
-        # Update sensor bindings first (this is local only)
-        binding_manager = async_get_binding_manager(self.hass)
-        await binding_manager._update_binding(self._dial_uid, new_config, self._dial_data)
-        
-        # Now save the configuration
+        # Save the configuration first
         await config_manager.async_update_dial_config(self._dial_uid, new_config)
+        
+        # Only update sensor bindings if binding-related keys changed
+        binding_keys = {"bound_entity", "update_mode", "value_min", "value_max"}
+        if any(key in config_updates for key in binding_keys):
+            binding_manager = async_get_binding_manager(self.hass)
+            await binding_manager._update_binding(self._dial_uid, new_config, self._dial_data)
         
         # If easing values changed, trigger behavior select update
         easing_keys = {
@@ -124,17 +128,39 @@ class VU1ValueMinNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_min_value = -1000
         self._attr_native_max_value = 1000
         self._attr_native_step = 0.1
+        # Initialize with current config value
+        config_manager = async_get_config_manager(coordinator.hass)
+        config = config_manager.get_dial_config(dial_uid)
+        self._attr_native_value = config.get("value_min", 0)
+
+    async def _sync_from_config(self) -> None:
+        """Sync from configuration."""
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        self._attr_native_value = config.get("value_min", 0)
 
     @property
     def native_value(self) -> float:
         """Return the current value."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        return config.get("value_min", 0)
+        return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
-        await self._update_config(value_min=value)
+        # Store old value for rollback
+        old_value = self._attr_native_value
+        
+        # Immediately update local state for responsive UI
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        
+        try:
+            # Save to configuration
+            await self._update_config(value_min=value)
+        except Exception as err:
+            # Rollback on error
+            self._attr_native_value = old_value
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to update value range minimum: {err}")
 
 
 class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
@@ -149,17 +175,39 @@ class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_min_value = -1000
         self._attr_native_max_value = 1000
         self._attr_native_step = 0.1
+        # Initialize with current config value
+        config_manager = async_get_config_manager(coordinator.hass)
+        config = config_manager.get_dial_config(dial_uid)
+        self._attr_native_value = config.get("value_max", 100)
+
+    async def _sync_from_config(self) -> None:
+        """Sync from configuration."""
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        self._attr_native_value = config.get("value_max", 100)
 
     @property
     def native_value(self) -> float:
         """Return the current value."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        return config.get("value_max", 100)
+        return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
-        await self._update_config(value_max=value)
+        # Store old value for rollback
+        old_value = self._attr_native_value
+        
+        # Immediately update local state for responsive UI
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        
+        try:
+            # Save to configuration
+            await self._update_config(value_max=value)
+        except Exception as err:
+            # Rollback on error
+            self._attr_native_value = old_value
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to update value range maximum: {err}")
 
 
 class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
@@ -175,20 +223,41 @@ class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_max_value = 1000
         self._attr_native_step = 10
         self._attr_native_unit_of_measurement = "ms"
+        # Initialize with current config value
+        config_manager = async_get_config_manager(coordinator.hass)
+        config = config_manager.get_dial_config(dial_uid)
+        self._attr_native_value = config.get("dial_easing_period", 50)
+
+    async def _sync_from_config(self) -> None:
+        """Sync from configuration."""
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        self._attr_native_value = config.get("dial_easing_period", 50)
 
     @property
     def native_value(self) -> int:
         """Return the current value."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        return config.get("dial_easing_period", 50)
+        return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
-        # Apply to hardware first
-        await self._apply_easing_config_with_new_value(int(value), None)
-        # If successful, save config
-        await self._update_config(dial_easing_period=int(value))
+        # Store old value for rollback
+        old_value = self._attr_native_value
+        
+        # Immediately update local state for responsive UI
+        self._attr_native_value = int(value)
+        self.async_write_ha_state()
+        
+        try:
+            # Apply to hardware first
+            await self._apply_easing_config_with_new_value(int(value), None)
+            # If successful, save config
+            await self._update_config(dial_easing_period=int(value))
+        except Exception as err:
+            # Rollback on error
+            self._attr_native_value = old_value
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to update dial easing period: {err}")
 
     async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
         """Apply easing configuration to server with specific new values."""
@@ -231,20 +300,41 @@ class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_max_value = 100
         self._attr_native_step = 1
         self._attr_native_unit_of_measurement = "%"
+        # Initialize with current config value
+        config_manager = async_get_config_manager(coordinator.hass)
+        config = config_manager.get_dial_config(dial_uid)
+        self._attr_native_value = config.get("dial_easing_step", 5)
+
+    async def _sync_from_config(self) -> None:
+        """Sync from configuration."""
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        self._attr_native_value = config.get("dial_easing_step", 5)
 
     @property
     def native_value(self) -> int:
         """Return the current value."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        return config.get("dial_easing_step", 5)
+        return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
-        # Apply to hardware first
-        await self._apply_easing_config_with_new_value(None, int(value))
-        # If successful, save config
-        await self._update_config(dial_easing_step=int(value))
+        # Store old value for rollback
+        old_value = self._attr_native_value
+        
+        # Immediately update local state for responsive UI
+        self._attr_native_value = int(value)
+        self.async_write_ha_state()
+        
+        try:
+            # Apply to hardware first
+            await self._apply_easing_config_with_new_value(None, int(value))
+            # If successful, save config
+            await self._update_config(dial_easing_step=int(value))
+        except Exception as err:
+            # Rollback on error
+            self._attr_native_value = old_value
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to update dial easing step: {err}")
 
     async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
         """Apply easing configuration to server with specific new values."""
@@ -287,20 +377,41 @@ class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_max_value = 1000
         self._attr_native_step = 10
         self._attr_native_unit_of_measurement = "ms"
+        # Initialize with current config value
+        config_manager = async_get_config_manager(coordinator.hass)
+        config = config_manager.get_dial_config(dial_uid)
+        self._attr_native_value = config.get("backlight_easing_period", 50)
+
+    async def _sync_from_config(self) -> None:
+        """Sync from configuration."""
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        self._attr_native_value = config.get("backlight_easing_period", 50)
 
     @property
     def native_value(self) -> int:
         """Return the current value."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        return config.get("backlight_easing_period", 50)
+        return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
-        # Apply to hardware first
-        await self._apply_easing_config_with_new_value(int(value), None)
-        # If successful, save config
-        await self._update_config(backlight_easing_period=int(value))
+        # Store old value for rollback
+        old_value = self._attr_native_value
+        
+        # Immediately update local state for responsive UI
+        self._attr_native_value = int(value)
+        self.async_write_ha_state()
+        
+        try:
+            # Apply to hardware first
+            await self._apply_easing_config_with_new_value(int(value), None)
+            # If successful, save config
+            await self._update_config(backlight_easing_period=int(value))
+        except Exception as err:
+            # Rollback on error
+            self._attr_native_value = old_value
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to update backlight easing period: {err}")
 
     async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
         """Apply easing configuration to server with specific new values."""
@@ -343,20 +454,41 @@ class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_max_value = 100
         self._attr_native_step = 1
         self._attr_native_unit_of_measurement = "%"
+        # Initialize with current config value
+        config_manager = async_get_config_manager(coordinator.hass)
+        config = config_manager.get_dial_config(dial_uid)
+        self._attr_native_value = config.get("backlight_easing_step", 5)
+
+    async def _sync_from_config(self) -> None:
+        """Sync from configuration."""
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        self._attr_native_value = config.get("backlight_easing_step", 5)
 
     @property
     def native_value(self) -> int:
         """Return the current value."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        return config.get("backlight_easing_step", 5)
+        return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
-        # Apply to hardware first
-        await self._apply_easing_config_with_new_value(None, int(value))
-        # If successful, save config
-        await self._update_config(backlight_easing_step=int(value))
+        # Store old value for rollback
+        old_value = self._attr_native_value
+        
+        # Immediately update local state for responsive UI
+        self._attr_native_value = int(value)
+        self.async_write_ha_state()
+        
+        try:
+            # Apply to hardware first
+            await self._apply_easing_config_with_new_value(None, int(value))
+            # If successful, save config
+            await self._update_config(backlight_easing_step=int(value))
+        except Exception as err:
+            # Rollback on error
+            self._attr_native_value = old_value
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to update backlight easing step: {err}")
 
     async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
         """Apply easing configuration to server with specific new values."""
