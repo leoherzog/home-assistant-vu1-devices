@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -73,8 +74,10 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
         self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{DOMAIN}_dial_{dial_uid}"
-        self._attr_name = f"{dial_data.get('dial_name', f'VU1 Dial {dial_uid}')} Value"
+        self._attr_name = "Value"
         self._attr_has_entity_name = True
+        self._entity_registry_updated_unsub = None
+        self._device_registry_updated_unsub = None
         self._attr_native_min_value = 0
         self._attr_native_max_value = 100
         self._attr_native_step = 1
@@ -146,3 +149,30 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
         if last_state is not None and last_state.state != "unknown":
             self._attr_native_value = float(last_state.state)
+        
+        # Subscribe to device registry updates to track name changes
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
+        if device:
+            self._device_registry_updated_unsub = dr.async_track_device_registry_updated_event(
+                self.hass,
+                device.id,
+                self._async_device_registry_updated
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """When entity will be removed from hass."""
+        await super().async_will_remove_from_hass()
+        
+        if self._entity_registry_updated_unsub:
+            self._entity_registry_updated_unsub()
+            
+        if self._device_registry_updated_unsub:
+            self._device_registry_updated_unsub()
+
+    @callback
+    def _async_device_registry_updated(self, event) -> None:
+        """Handle device registry update to sync name changes."""
+        # The device info property will automatically reflect the new name
+        # Just trigger a state update to refresh the UI
+        self.async_schedule_update_ha_state()
