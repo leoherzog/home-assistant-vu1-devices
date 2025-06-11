@@ -59,7 +59,7 @@ class VU1RefreshHardwareInfoButton(CoordinatorEntity, ButtonEntity):
             "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
             "manufacturer": "Streacom",
             "model": "VU1 Dial",
-            "via_device": (DOMAIN, f"vu1_server_{self.coordinator.client.host}_{self.coordinator.client.port}"),
+            "via_device": (DOMAIN, self.coordinator.server_device_id),
         }
 
     async def async_press(self) -> None:

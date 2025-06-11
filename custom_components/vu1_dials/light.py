@@ -78,7 +78,7 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
             "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
             "manufacturer": "Streacom",
             "model": "VU1 Dial",
-            "via_device": (DOMAIN, f"vu1_server_{self._client.host}_{self._client.port}"),
+            "via_device": (DOMAIN, self.coordinator.server_device_id),
         }
 
     @property
