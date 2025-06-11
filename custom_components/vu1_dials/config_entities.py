@@ -29,6 +29,28 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         self._attr_entity_category = EntityCategory.CONFIG
         self._attr_has_entity_name = True
 
+    async def async_added_to_hass(self) -> None:
+        """Register for configuration change notifications."""
+        await super().async_added_to_hass()
+        
+        # Register as a listener for configuration changes
+        config_manager = async_get_config_manager(self.hass)
+        config_manager.async_add_listener(self._dial_uid, self._on_config_change)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister from configuration change notifications."""
+        await super().async_will_remove_from_hass()
+        
+        # Unregister as a listener
+        config_manager = async_get_config_manager(self.hass)
+        config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
+
+    async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
+        """Handle configuration changes."""
+        if dial_uid == self._dial_uid:
+            # Trigger immediate state update
+            self.async_schedule_update_ha_state()
+
     @property
     def device_info(self) -> Dict[str, Any]:
         """Return device information."""
@@ -70,10 +92,17 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         )
         
         if behavior_entity_id:
-            # Get the entity and trigger state update
-            behavior_entity = self.hass.data.get("entity_platform", {}).get(behavior_entity_id)
-            if hasattr(behavior_entity, "async_schedule_update_ha_state"):
-                behavior_entity.async_schedule_update_ha_state()
+            # Force the entity to update by triggering a state write
+            # This will cause the select entity to recalculate its current_option
+            if self.hass.states.get(behavior_entity_id):
+                # Get current state and write it back to trigger update
+                current_state = self.hass.states.get(behavior_entity_id)
+                self.hass.states.async_set(
+                    behavior_entity_id, 
+                    current_state.state,
+                    current_state.attributes,
+                    force_update=True
+                )
                 _LOGGER.debug("Triggered behavior select update for %s", self._dial_uid)
 
 
@@ -318,21 +347,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         # Remove entity_category for sensor entities
         self._attr_entity_category = None
 
-    async def async_added_to_hass(self) -> None:
-        """Register for configuration change notifications."""
-        await super().async_added_to_hass()
-        
-        # Register as a listener for configuration changes
-        config_manager = async_get_config_manager(self.hass)
-        config_manager.async_add_listener(self._dial_uid, self._on_config_change)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Unregister from configuration change notifications."""
-        await super().async_will_remove_from_hass()
-        
-        # Unregister as a listener
-        config_manager = async_get_config_manager(self.hass)
-        config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
+    # Config change listeners inherited from base class
 
     async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
         """Handle configuration changes."""
@@ -390,21 +405,7 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         # Remove entity_category for sensor entities
         self._attr_entity_category = None
 
-    async def async_added_to_hass(self) -> None:
-        """Register for configuration change notifications."""
-        await super().async_added_to_hass()
-        
-        # Register as a listener for configuration changes
-        config_manager = async_get_config_manager(self.hass)
-        config_manager.async_add_listener(self._dial_uid, self._on_config_change)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Unregister from configuration change notifications."""
-        await super().async_will_remove_from_hass()
-        
-        # Unregister as a listener
-        config_manager = async_get_config_manager(self.hass)
-        config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
+    # Config change listeners inherited from base class
 
     async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
         """Handle configuration changes."""
