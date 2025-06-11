@@ -92,7 +92,7 @@ class VU1SensorBindingManager:
         # Get client for this dial
         client = self._get_client_for_dial(dial_uid)
         if not client:
-            _LOGGER.error("No client found for dial %s", dial_uid)
+            _LOGGER.debug("No client found for dial %s (integration may still be loading)", dial_uid)
             return
 
         # Store binding info

@@ -98,47 +98,10 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
         await super().async_added_to_hass()
-        
-        # Subscribe to entity registry updates using event bus
-        from homeassistant.const import EVENT_ENTITY_REGISTRY_UPDATED
-        
-        @callback
-        def entity_registry_updated(event):
-            """Handle entity registry update."""
-            if event.data.get("entity_id") == self.entity_id:
-                self._async_entity_registry_updated(event)
-        
-        self._entity_registry_updated_unsub = self.hass.bus.async_listen(
-            EVENT_ENTITY_REGISTRY_UPDATED,
-            entity_registry_updated
-        )
-        
-        # Subscribe to device registry updates using event bus
-        from homeassistant.const import EVENT_DEVICE_REGISTRY_UPDATED
-        device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
-        
-        if device:
-            @callback
-            def device_registry_updated(event):
-                """Handle device registry update."""
-                if event.data.get("device_id") == device.id:
-                    self._async_device_registry_updated(event)
-            
-            self._device_registry_updated_unsub = self.hass.bus.async_listen(
-                EVENT_DEVICE_REGISTRY_UPDATED,
-                device_registry_updated
-            )
 
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from hass."""
         await super().async_will_remove_from_hass()
-        
-        if self._entity_registry_updated_unsub:
-            self._entity_registry_updated_unsub()
-            
-        if self._device_registry_updated_unsub:
-            self._device_registry_updated_unsub()
 
     @callback
     def _async_entity_registry_updated(self, event) -> None:

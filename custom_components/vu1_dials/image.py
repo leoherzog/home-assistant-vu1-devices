@@ -135,8 +135,9 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         return "image/png"
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return additional state attributes."""
+    def state_attributes(self) -> Dict[str, Any]:
+        """Return state attributes."""
+        # Override to prevent access_tokens error
         attributes = {}
         
         # Add image file information

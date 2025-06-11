@@ -188,22 +188,7 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         config_manager = async_get_config_manager(self.hass)
         config_manager.async_add_listener(self._dial_uid, self._on_config_change)
         
-        # Subscribe to device registry updates using event bus
-        from homeassistant.const import EVENT_DEVICE_REGISTRY_UPDATED
-        device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
-        
-        if device:
-            @callback
-            def device_registry_updated(event):
-                """Handle device registry update."""
-                if event.data.get("device_id") == device.id:
-                    self._async_device_registry_updated(event)
-            
-            self._device_registry_updated_unsub = self.hass.bus.async_listen(
-                EVENT_DEVICE_REGISTRY_UPDATED,
-                device_registry_updated
-            )
+        # Registry event tracking removed due to compatibility issues
 
     async def async_will_remove_from_hass(self) -> None:
         """Unregister from configuration change notifications."""
@@ -212,9 +197,6 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         # Unregister as a listener
         config_manager = async_get_config_manager(self.hass)
         config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
-        
-        if self._device_registry_updated_unsub:
-            self._device_registry_updated_unsub()
 
     async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
         """Handle configuration changes."""
