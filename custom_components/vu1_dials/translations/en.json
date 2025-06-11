@@ -71,6 +71,25 @@
           "custom": "Custom"
         }
       }
+    },
+    "sensor": {
+      "firmware_version": {
+        "name": "Firmware version"
+      },
+      "hardware_version": {
+        "name": "Hardware version"
+      },
+      "protocol_version": {
+        "name": "Protocol version"
+      },
+      "firmware_hash": {
+        "name": "Firmware hash"
+      }
+    },
+    "button": {
+      "refresh_hardware_info": {
+        "name": "Refresh hardware info"
+      }
     }
   }
 }

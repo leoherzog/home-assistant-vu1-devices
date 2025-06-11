@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -42,6 +43,14 @@ async def async_setup_entry(
         entities.extend([
             VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
             VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
+        ])
+        
+        # Diagnostic sensors (disabled by default)
+        entities.extend([
+            VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
+            VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
+            VU1ProtocolVersionSensor(coordinator, dial_uid, dial_info),
+            VU1FirmwareHashSensor(coordinator, dial_uid, dial_info),
         ])
 
     async_add_entities(entities)
@@ -295,3 +304,90 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
             await self.coordinator.async_request_refresh()
         except Exception as err:
             _LOGGER.error("Failed to calibrate dial %s: %s", self._dial_uid, err)
+
+
+class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
+    """Base class for VU1 diagnostic sensors."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any], attr_name: str, sensor_name: str) -> None:
+        """Initialize the diagnostic sensor."""
+        super().__init__(coordinator)
+        self._dial_uid = dial_uid
+        self._attr_name = attr_name
+        self._attr_unique_id = f"{dial_uid}_{attr_name.lower().replace(' ', '_')}"
+        self._attr_name = sensor_name
+        self._attr_has_entity_name = True
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_entity_registry_enabled_default = False
+        self._attr_icon = "mdi:information"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information about this VU1 dial."""
+        dial_name = f"VU1 Dial {self._dial_uid}"
+        if self.coordinator.data:
+            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+            dial_name = dial_data.get("dial_name", dial_name)
+        
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._dial_uid)},
+            name=dial_name,
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+            sw_version="1.0",
+            via_device=(DOMAIN, f"vu1_server_{self.coordinator.client.host}_{self.coordinator.client.port}"),
+        )
+
+    @property
+    def native_value(self) -> Optional[str]:
+        """Return the state of the sensor."""
+        if not self.coordinator.data:
+            return None
+            
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        if not dial_data:
+            return None
+            
+        detailed_status = dial_data.get("detailed_status", {})
+        return detailed_status.get(self._attr_name)
+
+    @property
+    def should_poll(self) -> bool:
+        """No polling needed, we use coordinator."""
+        return False
+
+
+class VU1FirmwareVersionSensor(VU1DiagnosticSensorBase):
+    """Sensor for firmware version."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the firmware version sensor."""
+        super().__init__(coordinator, dial_uid, dial_data, "fw_version", "Firmware version")
+        self._attr_icon = "mdi:chip"
+
+
+class VU1HardwareVersionSensor(VU1DiagnosticSensorBase):
+    """Sensor for hardware version."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the hardware version sensor."""
+        super().__init__(coordinator, dial_uid, dial_data, "hw_version", "Hardware version")
+        self._attr_icon = "mdi:developer-board"
+
+
+class VU1ProtocolVersionSensor(VU1DiagnosticSensorBase):
+    """Sensor for protocol version."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the protocol version sensor."""
+        super().__init__(coordinator, dial_uid, dial_data, "protocol_version", "Protocol version")
+        self._attr_icon = "mdi:api"
+
+
+class VU1FirmwareHashSensor(VU1DiagnosticSensorBase):
+    """Sensor for firmware hash."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+        """Initialize the firmware hash sensor."""
+        super().__init__(coordinator, dial_uid, dial_data, "fw_hash", "Firmware hash")
+        self._attr_icon = "mdi:fingerprint"
