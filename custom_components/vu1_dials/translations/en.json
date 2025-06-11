@@ -90,6 +90,11 @@
       "refresh_hardware_info": {
         "name": "Refresh hardware info"
       }
+    },
+    "image": {
+      "background_image": {
+        "name": "Background image"
+      }
     }
   }
 }

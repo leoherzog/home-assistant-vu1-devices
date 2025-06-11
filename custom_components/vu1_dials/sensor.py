@@ -391,3 +391,5 @@ class VU1FirmwareHashSensor(VU1DiagnosticSensorBase):
         """Initialize the firmware hash sensor."""
         super().__init__(coordinator, dial_uid, dial_data, "fw_hash", "Firmware hash")
         self._attr_icon = "mdi:fingerprint"
+
+
