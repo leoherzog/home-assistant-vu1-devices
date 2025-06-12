@@ -56,6 +56,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         self.client = client
         self._previous_dial_names: Dict[str, str] = {}
         self._name_change_grace_periods: Dict[str, datetime] = {}
+        self._behavior_change_grace_periods: Dict[str, datetime] = {}
         self._grace_period_seconds = 10
         self.server_device_id: Optional[str] = None
 
@@ -188,10 +189,25 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             "Started grace period for %s until %s", 
             dial_uid, grace_end.isoformat()
         )
+
+    def mark_behavior_change_from_ha(self, dial_uid: str) -> None:
+        """Mark that a behavior change originated from HA to prevent sync loops."""
+        grace_end = datetime.now() + timedelta(seconds=self._grace_period_seconds)
+        self._behavior_change_grace_periods[dial_uid] = grace_end
+        _LOGGER.debug(
+            "Started behavior grace period for %s until %s",
+            dial_uid, grace_end.isoformat()
+        )
     
     async def _check_server_behavior_change(self, dial_uid: str, status: Dict[str, Any]) -> None:
         """Check if server behavior settings changed and sync to HA."""
         if not status:
+            return
+            
+        current_time = datetime.now()
+        grace_end = self._behavior_change_grace_periods.get(dial_uid)
+        if grace_end and current_time < grace_end:
+            _LOGGER.debug("Ignoring server behavior change for %s during grace period", dial_uid)
             return
             
         # Extract easing settings from server status

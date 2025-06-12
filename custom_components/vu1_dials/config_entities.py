@@ -271,6 +271,9 @@ class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
             raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
             
         client, coordinator = result
+
+        coordinator.mark_behavior_change_from_ha(self._dial_uid)
+
         config_manager = async_get_config_manager(self.hass)
         config = config_manager.get_dial_config(self._dial_uid)
         
@@ -348,6 +351,9 @@ class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
             raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
             
         client, coordinator = result
+        
+        coordinator.mark_behavior_change_from_ha(self._dial_uid)
+
         config_manager = async_get_config_manager(self.hass)
         config = config_manager.get_dial_config(self._dial_uid)
         
@@ -425,6 +431,9 @@ class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
             raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
             
         client, coordinator = result
+        
+        coordinator.mark_behavior_change_from_ha(self._dial_uid)
+
         config_manager = async_get_config_manager(self.hass)
         config = config_manager.get_dial_config(self._dial_uid)
         
@@ -502,6 +511,9 @@ class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
             raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
             
         client, coordinator = result
+        
+        coordinator.mark_behavior_change_from_ha(self._dial_uid)
+
         config_manager = async_get_config_manager(self.hass)
         config = config_manager.get_dial_config(self._dial_uid)
         

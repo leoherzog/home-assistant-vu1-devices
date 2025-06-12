@@ -64,15 +64,28 @@ class VU1SensorBindingManager:
         """Update binding for a specific dial."""
         bound_entity = config.get(CONF_BOUND_ENTITY)
         update_mode = config.get(CONF_UPDATE_MODE)
-        
-        # Remove existing binding if entity changed or mode is manual
-        if dial_uid in self._bindings:
-            old_entity = self._bindings[dial_uid].get("entity_id")
-            if old_entity != bound_entity or update_mode != UPDATE_MODE_AUTOMATIC:
-                await self._remove_binding(dial_uid)
 
-        # Create new binding if entity is set and mode is automatic
-        if bound_entity and update_mode == UPDATE_MODE_AUTOMATIC:
+        existing_binding = self._bindings.get(dial_uid)
+
+        # If mode is not automatic, or no entity is bound, remove any existing binding.
+        if update_mode != UPDATE_MODE_AUTOMATIC or not bound_entity:
+            if existing_binding:
+                await self._remove_binding(dial_uid)
+            return
+
+        # At this point, mode is automatic and an entity is bound.
+        if existing_binding:
+            # A binding already exists. Check if it's for the same entity.
+            if existing_binding.get("entity_id") != bound_entity:
+                # The bound entity has changed. Recreate the binding.
+                await self._remove_binding(dial_uid)
+                await self._create_binding(dial_uid, bound_entity, config, dial_data)
+            else:
+                # The binding is for the same entity. Just update the config in memory.
+                existing_binding["config"] = config.copy()
+                existing_binding["dial_data"] = dial_data.copy()
+        else:
+            # No binding exists for this dial. Create one.
             await self._create_binding(dial_uid, bound_entity, config, dial_data)
 
     async def _create_binding(
