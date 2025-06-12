@@ -57,8 +57,14 @@ class VU1DialConfigManager:
         self, dial_uid: str, config: Dict[str, Any]
     ) -> None:
         """Update configuration for a dial."""
-        # Validate the configuration
-        validated_config = self._validate_config(config)
+        # Get the existing configuration
+        existing_config = self.get_dial_config(dial_uid)
+        
+        # Merge with new config
+        merged_config = {**existing_config, **config}
+        
+        # Validate the merged configuration
+        validated_config = self._validate_config(merged_config)
         
         # Store the configuration
         self._configs[dial_uid] = validated_config
@@ -85,45 +91,49 @@ class VU1DialConfigManager:
 
     def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and sanitize dial configuration."""
-        validated = self._get_default_config()
+        # Create a copy to operate on, preserving the original
+        validated = config.copy()
         
-        # Update with provided values, validating each
-        if CONF_BOUND_ENTITY in config:
-            entity_id = config[CONF_BOUND_ENTITY]
-            if entity_id and self._is_valid_entity(entity_id):
-                validated[CONF_BOUND_ENTITY] = entity_id
+        # Get defaults to fill in any missing keys, without overwriting existing ones
+        defaults = self._get_default_config()
+        for key, default_value in defaults.items():
+            if key not in validated:
+                validated[key] = default_value
         
-        if CONF_VALUE_MIN in config:
-            try:
-                validated[CONF_VALUE_MIN] = max(0, min(100, float(config[CONF_VALUE_MIN])))
-            except (ValueError, TypeError):
-                pass
+        # Validate bound_entity
+        if validated.get(CONF_BOUND_ENTITY) and not self._is_valid_entity(validated[CONF_BOUND_ENTITY]):
+            validated[CONF_BOUND_ENTITY] = None
         
-        if CONF_VALUE_MAX in config:
-            try:
-                validated[CONF_VALUE_MAX] = max(0, min(100, float(config[CONF_VALUE_MAX])))
-            except (ValueError, TypeError):
-                pass
-        
+        # Validate value_min
+        try:
+            validated[CONF_VALUE_MIN] = float(validated[CONF_VALUE_MIN])
+        except (ValueError, TypeError, KeyError):
+            validated[CONF_VALUE_MIN] = defaults[CONF_VALUE_MIN]
+
+        # Validate value_max
+        try:
+            validated[CONF_VALUE_MAX] = float(validated[CONF_VALUE_MAX])
+        except (ValueError, TypeError, KeyError):
+            validated[CONF_VALUE_MAX] = defaults[CONF_VALUE_MAX]
+            
         # Ensure min <= max
         if validated[CONF_VALUE_MIN] > validated[CONF_VALUE_MAX]:
             validated[CONF_VALUE_MIN], validated[CONF_VALUE_MAX] = validated[CONF_VALUE_MAX], validated[CONF_VALUE_MIN]
         
-        if CONF_BACKLIGHT_COLOR in config:
-            color = config[CONF_BACKLIGHT_COLOR]
-            if isinstance(color, list) and len(color) == 3:
-                try:
-                    validated[CONF_BACKLIGHT_COLOR] = [
-                        max(0, min(100, int(c))) for c in color
-                    ]
-                except (ValueError, TypeError):
-                    pass
-        
-        if CONF_UPDATE_MODE in config:
-            mode = config[CONF_UPDATE_MODE]
-            if mode in [UPDATE_MODE_AUTOMATIC, "manual"]:
-                validated[CONF_UPDATE_MODE] = mode
-        
+        # Validate backlight_color
+        color = validated.get(CONF_BACKLIGHT_COLOR)
+        if isinstance(color, list) and len(color) == 3:
+            try:
+                validated[CONF_BACKLIGHT_COLOR] = [max(0, min(100, int(c))) for c in color]
+            except (ValueError, TypeError):
+                validated[CONF_BACKLIGHT_COLOR] = defaults[CONF_BACKLIGHT_COLOR]
+        else:
+            validated[CONF_BACKLIGHT_COLOR] = defaults[CONF_BACKLIGHT_COLOR]
+
+        # Validate update_mode
+        if validated.get(CONF_UPDATE_MODE) not in [UPDATE_MODE_AUTOMATIC, "manual"]:
+            validated[CONF_UPDATE_MODE] = defaults[CONF_UPDATE_MODE]
+
         return validated
 
     def _is_valid_entity(self, entity_id: str) -> bool:
