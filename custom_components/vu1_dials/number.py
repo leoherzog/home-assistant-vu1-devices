@@ -111,12 +111,40 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Set the dial value."""
         try:
+            # First, switch to manual mode if currently in automatic mode
+            await self._switch_to_manual_mode_if_needed()
+            
+            # Set the dial value
             await self._client.set_dial_value(self._dial_uid, int(value))
             # Trigger coordinator refresh to update state
             await self.coordinator.async_request_refresh()
         except Exception as err:
             _LOGGER.error("Failed to set dial value for %s: %s", self._dial_uid, err)
             raise
+
+    async def _switch_to_manual_mode_if_needed(self) -> None:
+        """Switch to manual mode if currently in automatic mode."""
+        from .device_config import async_get_config_manager
+        from .sensor_binding import async_get_binding_manager
+        
+        config_manager = async_get_config_manager(self.hass)
+        config = config_manager.get_dial_config(self._dial_uid)
+        
+        # Only switch if currently in automatic mode
+        if config.get("update_mode") == "automatic":
+            _LOGGER.info("Switching dial %s from automatic to manual mode due to manual value change", self._dial_uid)
+            
+            # Update configuration to manual mode
+            await config_manager.async_update_dial_config(
+                self._dial_uid, 
+                {"update_mode": "manual"}
+            )
+            
+            # Update sensor bindings to remove the automatic binding
+            binding_manager = async_get_binding_manager(self.hass)
+            dials_data = self.coordinator.data.get("dials", {})
+            dial_data = dials_data.get(self._dial_uid, {})
+            await binding_manager._update_binding(self._dial_uid, {"update_mode": "manual"}, dial_data)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
