@@ -11,17 +11,10 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
 
 from .const import DOMAIN
-from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_server
+from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 
 _LOGGER = logging.getLogger(__name__)
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required("host", default="localhost"): cv.string,
-        vol.Required("port", default=5340): cv.port,
-        vol.Required("api_key"): cv.string,
-    }
-)
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -37,42 +30,70 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_ingress: bool = False
         self._discovered_slug: Optional[str] = None
         self._supervisor_token: Optional[str] = None
+        self._addon_available: bool = False
+        self._addon_name: Optional[str] = None
 
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> FlowResult:
-        """Handle the initial step."""
+        """Handle the initial step - show connection type selection."""
         errors: Dict[str, str] = {}
-        description_placeholders: Dict[str, str] = {}
 
-        # Try auto-discovery first
         if user_input is None:
-            _LOGGER.info("VU1 integration auto-discovery starting...")
-            discovered = await discover_vu1_server()
-            _LOGGER.info("VU1 discovery result: %s", discovered)
-            if discovered:
-                # Store discovery information
+            # Check if add-on is available
+            _LOGGER.info("Checking for VU1 Server add-on...")
+            discovered = await discover_vu1_addon()
+            
+            if discovered and discovered.get("addon_discovered"):
+                self._addon_available = True
                 self._discovered_ingress = discovered.get("ingress", False)
                 self._discovered_slug = discovered.get("slug")
                 self._supervisor_token = discovered.get("supervisor_token")
+                self._discovered_host = discovered.get("host", discovered.get("addon_ip"))
+                self._discovered_port = discovered.get("port", discovered.get("ingress_port", 5340))
                 
-                if self._discovered_ingress:
-                    # For ingress, use actual IP and port
-                    self._discovered_host = discovered.get("host", f"local-{self._discovered_slug}")
-                    self._discovered_port = discovered.get("port", discovered.get("ingress_port", 5340))
-                    unique_id = f"vu1_server_ingress_{self._discovered_slug}"
-                else:
-                    # Use actual discovered host/port or defaults
-                    self._discovered_host = discovered.get("host", "localhost")
-                    self._discovered_port = discovered.get("port", 5340)
-                    unique_id = f"vu1_server_{self._discovered_host}_{self._discovered_port}"
+                # Extract add-on name from slug (e.g., "local_vu-server-addon" -> "vu-server-addon")
+                addon_slug = discovered.get("slug", "")
+                self._addon_name = addon_slug.split("_")[-1] if "_" in addon_slug else addon_slug
                 
-                self._discovery_method = "addon" if discovered.get("addon_discovered") else "localhost"
-                
-                # Set unique ID to prevent duplicate configs
-                await self.async_set_unique_id(unique_id)
-                self._abort_if_unique_id_configured()
-                return await self.async_step_discovery()
+                _LOGGER.info("VU1 Server add-on found: %s", self._addon_name)
+            else:
+                _LOGGER.info("No VU1 Server add-on found")
+
+            # Show connection type selection
+            options = [
+                {"value": "manual", "label": "Manual configuration"}
+            ]
+            
+            if self._addon_available:
+                options.insert(0, {"value": "addon", "label": f"VU1 Server Add-on ({self._addon_name or 'Unknown'})"})
+            
+            schema = vol.Schema({
+                vol.Required("connection_type"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=options)
+                )
+            })
+            
+            return self.async_show_form(
+                step_id="user",
+                data_schema=schema,
+                errors=errors,
+                description_placeholders={
+                    "info": "Select how to connect to your VU1 Server."
+                }
+            )
+
+        # User selected connection type
+        if user_input.get("connection_type") == "addon":
+            return await self.async_step_addon()
+        else:
+            return await self.async_step_manual()
+
+    async def async_step_manual(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> FlowResult:
+        """Handle manual configuration."""
+        errors: Dict[str, str] = {}
 
         if user_input is not None:
             # Set unique ID to prevent duplicate configs
@@ -91,43 +112,54 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return self.async_create_entry(title=info["title"], data=user_input)
 
-        # No auto-discovery, show manual form with helpful message
-        description_placeholders = {"discovery_info": "No VU1 Server auto-discovered. Please configure manually or ensure the VU1 Server add-on is running."}
+        # Show manual configuration form
+        schema = vol.Schema({
+            vol.Required("host", default="localhost"): cv.string,
+            vol.Required("port", default=5340): cv.port,
+            vol.Required("api_key"): cv.string,
+        })
+
         return self.async_show_form(
-            step_id="user", 
-            data_schema=STEP_USER_DATA_SCHEMA, 
+            step_id="manual",
+            data_schema=schema,
             errors=errors,
-            description_placeholders=description_placeholders,
+            description_placeholders={
+                "info": "Enter the connection details for your VU1 Server."
+            }
         )
 
-    async def async_step_discovery(
+    async def async_step_addon(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> FlowResult:
-        """Handle discovery step."""
+        """Handle add-on configuration."""
         errors: Dict[str, str] = {}
 
         if user_input is not None:
-            # Combine discovered info with user input
+            # Prepare full configuration with discovered add-on details
+            full_input = {
+                "host": self._discovered_host,
+                "port": self._discovered_port,
+                "api_key": user_input["api_key"],
+            }
+            
             if self._discovered_ingress:
-                # For ingress, store as host/port but with special markers
-                full_input = {
-                    "host": self._discovered_host,  # local-{slug}
-                    "port": self._discovered_port,
-                    "api_key": user_input["api_key"],
+                full_input.update({
                     "ingress": True,
                     "ingress_slug": self._discovered_slug,
                     "supervisor_token": self._supervisor_token,
-                }
+                })
+            
+            # Set unique ID
+            if self._discovered_ingress:
+                await self.async_set_unique_id(f"vu1_server_ingress_{self._discovered_slug}")
             else:
-                # For direct connection
-                full_input = {
-                    "host": self._discovered_host or user_input.get("host", "localhost"),
-                    "port": self._discovered_port or user_input.get("port", 5340),
-                    "api_key": user_input["api_key"],
-                }
-
+                await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
+            self._abort_if_unique_id_configured()
+            
             try:
                 info = await validate_input(self.hass, full_input)
+                # Override title to use Add-on format
+                info["title"] = f"Add-on ({self._addon_name or 'Unknown'})"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -136,48 +168,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
             else:
-                # Update unique ID with final configuration
-                if self._discovered_ingress:
-                    await self.async_set_unique_id(f"vu1_server_ingress_{self._discovered_slug}")
-                else:
-                    await self.async_set_unique_id(f"vu1_server_{full_input['host']}_{full_input['port']}")
                 return self.async_create_entry(title=info["title"], data=full_input)
 
-        # Show form with discovered info pre-filled
-        if self._discovered_ingress:
-            # For ingress, only show API key field
-            discovery_schema = vol.Schema({
-                vol.Required("api_key"): cv.string,
-            })
-        else:
-            # For direct connection, show all fields
-            discovery_schema = vol.Schema(
-                {
-                    vol.Required(
-                        "host", default=self._discovered_host or "localhost"
-                    ): cv.string,
-                    vol.Required(
-                        "port", default=self._discovered_port or 5340
-                    ): cv.port,
-                    vol.Required("api_key"): cv.string,
-                }
-            )
-
-        # Add helpful description based on discovery method
-        description_placeholders = {}
-        if self._discovery_method == "addon":
-            if hasattr(self, '_discovered_ingress') and self._discovered_ingress:
-                description_placeholders["discovery_info"] = f"Discovered VU1 Server add-on via Ingress proxy."
-            else:
-                description_placeholders["discovery_info"] = f"VU1 Server add-on auto-discovered at {self._discovered_host}:{self._discovered_port}. This uses the internal add-on network and doesn't require exposing ports."
-        else:
-            description_placeholders["discovery_info"] = f"VU1 Server discovered at {self._discovered_host}:{self._discovered_port}."
+        # Show add-on configuration form (only API key needed)
+        schema = vol.Schema({
+            vol.Required("api_key"): cv.string,
+        })
 
         return self.async_show_form(
-            step_id="discovery",
-            data_schema=discovery_schema,
+            step_id="addon",
+            data_schema=schema,
             errors=errors,
-            description_placeholders=description_placeholders,
+            description_placeholders={
+                "info": f"Enter the API key for the VU1 Server Add-on ({self._addon_name or 'Unknown'})."
+            }
         )
 
     @staticmethod
@@ -538,6 +542,6 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
 
     # Return info that you want to store in the config entry.
     return {
-        "title": f"VU1 Dials ({connection_info})",
+        "title": f"VU1 Server ({connection_info})",
         "dial_count": len(dials),
     }

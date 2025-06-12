@@ -2,20 +2,25 @@
   "config": {
     "step": {
       "user": {
-        "title": "Set up VU1 Dials",
-        "description": "Configure your VU1 server connection. {discovery_info}",
+        "title": "Connect to VU1 Server",
+        "description": "{info}",
+        "data": {
+          "connection_type": "Connection method"
+        }
+      },
+      "manual": {
+        "title": "Manual Configuration",
+        "description": "{info}",
         "data": {
           "host": "Host",
           "port": "Port",
           "api_key": "API Key"
         }
       },
-      "discovery": {
-        "title": "VU1 Server Discovered",
-        "description": "{discovery_info} Please enter your API key to continue.",
+      "addon": {
+        "title": "VU1 Server Add-on",
+        "description": "{info}",
         "data": {
-          "host": "Host",
-          "port": "Port",
           "api_key": "API Key"
         }
       }
