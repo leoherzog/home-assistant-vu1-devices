@@ -56,7 +56,6 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
         """Return device information for the VU1 server."""
         return {
             "identifiers": {(DOMAIN, self.coordinator.server_device_id)},
-            "name": self.coordinator.server_device_name,
             "manufacturer": "Streacom",
             "model": "VU1 Server",
         }
