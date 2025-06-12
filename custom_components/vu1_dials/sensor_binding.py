@@ -1,13 +1,13 @@
 """Sensor binding system for VU1 dials."""
 import asyncio
+import functools
 import logging
-from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers import entity_registry as er
-from homeassistant.util import dt as dt_util
+from homeassistant.helpers.debounce import Debouncer
 
 from .const import (
     DOMAIN,
@@ -36,8 +36,7 @@ class VU1SensorBindingManager:
         self._bindings: Dict[str, Dict[str, Any]] = {}  # dial_uid -> binding_info
         self._listeners: Dict[str, Any] = {}  # entity_id -> listener
         self._config_manager = async_get_config_manager(hass)
-        self._last_update_times: Dict[str, datetime] = {}  # dial_uid -> last_update_time
-        self._pending_updates: Dict[str, Optional[asyncio.Handle]] = {}  # dial_uid -> scheduled_update
+        self._debouncers: Dict[str, Debouncer] = {}  # dial_uid -> debouncer
 
     async def async_setup(self) -> None:
         """Set up the binding manager."""
@@ -114,23 +113,31 @@ class VU1SensorBindingManager:
             "config": config.copy(),
             "dial_data": dial_data.copy(),
             "client": client,
+            "last_state": None,  # Add a place to store the most recent state
         }
 
-        # Set up state change listener
-        listener = async_track_state_change_event(
+        # Create debouncer that calls _apply_sensor_value for this specific dial
+        self._debouncers[dial_uid] = Debouncer(
             self.hass,
-            [entity_id],
-            self._async_sensor_state_changed,
+            _LOGGER,
+            cooldown=DEBOUNCE_SECONDS,
+            immediate=False,
+            # Use functools.partial here to create a stable reference to the function
+            function=functools.partial(self._apply_sensor_value, dial_uid),
         )
-        self._listeners[entity_id] = listener
+
+        # Set up state change listener
+        self._listeners[entity_id] = async_track_state_change_event(
+            self.hass, [entity_id], self._async_sensor_state_changed
+        )
 
         _LOGGER.info("Created sensor binding: %s -> dial %s", entity_id, dial_uid)
 
-        # Apply initial state (bypass debouncing for initial state)
-        state = self.hass.states.get(entity_id)
-        if state:
-            self._last_update_times[dial_uid] = dt_util.utcnow()
-            await self._apply_sensor_value(dial_uid, state, config, client)
+        # Apply initial state immediately, bypassing the debouncer
+        initial_state = self.hass.states.get(entity_id)
+        if initial_state:
+            # We can now pass the state directly since we are not using the debouncer here
+            await self._apply_sensor_value_from_state(dial_uid, initial_state)
 
     async def _remove_binding(self, dial_uid: str) -> None:
         """Remove a sensor binding."""
@@ -145,14 +152,9 @@ class VU1SensorBindingManager:
             self._listeners[entity_id]()
             del self._listeners[entity_id]
 
-        # Cancel any pending update
-        if dial_uid in self._pending_updates and self._pending_updates[dial_uid]:
-            self._pending_updates[dial_uid].cancel()
-            del self._pending_updates[dial_uid]
-        
-        # Clear last update time
-        if dial_uid in self._last_update_times:
-            del self._last_update_times[dial_uid]
+        # Cancel and remove debouncer
+        if debouncer := self._debouncers.pop(dial_uid, None):
+            await debouncer.async_shutdown()
 
         # Remove binding
         del self._bindings[dial_uid]
@@ -170,66 +172,29 @@ class VU1SensorBindingManager:
         # Find dial(s) bound to this entity
         for dial_uid, binding_info in self._bindings.items():
             if binding_info["entity_id"] == entity_id:
-                self._schedule_dial_update(dial_uid, new_state, binding_info)
+                # 1. Store the latest state
+                binding_info["last_state"] = new_state
+                # 2. Schedule the call. The debouncer will execute the function we gave it earlier.
+                if debouncer := self._debouncers.get(dial_uid):
+                    debouncer.async_schedule_call()
 
-    def _schedule_dial_update(self, dial_uid: str, state: State, binding_info: Dict[str, Any]) -> None:
-        """Schedule a dial update with debouncing."""
-        now = dt_util.utcnow()
-        last_update = self._last_update_times.get(dial_uid)
-        
-        # Cancel any pending update for this dial
-        if dial_uid in self._pending_updates and self._pending_updates[dial_uid]:
-            self._pending_updates[dial_uid].cancel()
-        
-        # Check if we need to debounce
-        if last_update:
-            time_since_last = (now - last_update).total_seconds()
-            if time_since_last < DEBOUNCE_SECONDS:
-                # Schedule the update for later
-                delay = DEBOUNCE_SECONDS - time_since_last
-                _LOGGER.debug(
-                    "Debouncing dial update for %s, scheduling in %.1f seconds", 
-                    dial_uid, delay
-                )
-                
-                handle = self.hass.loop.call_later(
-                    delay,
-                    lambda: self.hass.async_create_task(
-                        self._apply_sensor_value_with_timestamp(dial_uid, state, binding_info)
-                    )
-                )
-                self._pending_updates[dial_uid] = handle
-                return
-        
-        # Apply immediately
-        self.hass.async_create_task(
-            self._apply_sensor_value_with_timestamp(dial_uid, state, binding_info)
-        )
+    async def _apply_sensor_value(self, dial_uid: str) -> None:
+        """Apply the last known sensor value to the dial. Called by the debouncer."""
+        binding_info = self._bindings.get(dial_uid)
+        if not binding_info or not binding_info["last_state"]:
+            return
+            
+        await self._apply_sensor_value_from_state(dial_uid, binding_info["last_state"])
 
-    async def _apply_sensor_value_with_timestamp(
-        self, dial_uid: str, state: State, binding_info: Dict[str, Any]
-    ) -> None:
-        """Apply sensor value and update timestamp."""
-        # Update timestamp
-        self._last_update_times[dial_uid] = dt_util.utcnow()
-        
-        # Clear pending update
-        if dial_uid in self._pending_updates:
-            self._pending_updates[dial_uid] = None
-        
-        # Apply the sensor value
-        await self._apply_sensor_value(
-            dial_uid, state, binding_info["config"], binding_info["client"]
-        )
+    async def _apply_sensor_value_from_state(self, dial_uid: str, state: State) -> None:
+        """The core logic for applying a sensor value to a dial."""
+        binding_info = self._bindings.get(dial_uid)
+        if not binding_info:
+            return
 
-    async def _apply_sensor_value(
-        self,
-        dial_uid: str,
-        state: State,
-        config: Dict[str, Any],
-        client: VU1APIClient,
-    ) -> None:
-        """Apply sensor value to dial."""
+        config = binding_info["config"]
+        client = binding_info["client"]
+        
         try:
             # Parse sensor value
             sensor_value = self._parse_sensor_value(state)
@@ -313,6 +278,10 @@ class VU1SensorBindingManager:
 
     async def async_shutdown(self) -> None:
         """Shutdown the binding manager."""
+        # Cancel all debouncers
+        for debouncer in self._debouncers.values():
+            await debouncer.async_shutdown()
+        
         # Remove all bindings
         dial_uids = list(self._bindings.keys())
         for dial_uid in dial_uids:
