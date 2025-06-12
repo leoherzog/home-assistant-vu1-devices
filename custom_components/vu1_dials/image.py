@@ -3,9 +3,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-# Temporarily remove ImageEntity inheritance to fix initialization issues
-# from homeassistant.components.image import ImageEntity
-from homeassistant.helpers.entity import Entity
+from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,18 +31,18 @@ async def async_setup_entry(
     # Create background image entity for each dial
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
-        entities.append(VU1DialBackgroundImage(coordinator, client, dial_uid, dial_info))
+        entities.append(VU1DialBackgroundImage(hass, coordinator, client, dial_uid, dial_info))
 
     async_add_entities(entities)
 
 
-class VU1DialBackgroundImage(CoordinatorEntity):
+class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
     """Image entity showing the current background image of a VU1 dial."""
 
-    def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, hass: HomeAssistant, coordinator, client: VU1APIClient, dial_uid: str, dial_data: Dict[str, Any]) -> None:
         """Initialize the dial background image entity."""
-        # Initialize CoordinatorEntity first (standard HA pattern)
-        super().__init__(coordinator)
+        CoordinatorEntity.__init__(self, coordinator)
+        ImageEntity.__init__(self, hass)
         self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{dial_uid}_background_image"
@@ -77,16 +75,6 @@ class VU1DialBackgroundImage(CoordinatorEntity):
             self.coordinator.last_update_success
             and self._dial_uid in self.coordinator.data.get("dials", {})
         )
-
-    @property
-    def state(self) -> str:
-        """Return the state of the image entity."""
-        image_file = self._get_current_image_file()
-        if image_file:
-            # Extract just the filename for display
-            filename = image_file.replace("\\", "/").split("/")[-1]
-            return filename
-        return "No image"
 
     async def async_image(self) -> Optional[bytes]:
         """Return the current dial background image."""
@@ -152,8 +140,7 @@ class VU1DialBackgroundImage(CoordinatorEntity):
     @property
     def state_attributes(self) -> Dict[str, Any]:
         """Return state attributes."""
-        # Override to prevent access_tokens error
-        attributes = {}
+        attributes = super().state_attributes or {}
         
         # Add image file information
         image_file = self._get_current_image_file()
