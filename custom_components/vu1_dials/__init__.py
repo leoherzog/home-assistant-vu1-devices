@@ -308,12 +308,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Register the VU1 server as a device BEFORE setting up platforms
     device_registry = dr.async_get(hass)
+    
+    # Determine device name based on connection type
+    if entry.data.get("ingress"):
+        # Extract add-on name from slug
+        addon_slug = entry.data.get("ingress_slug", "")
+        addon_name = addon_slug.split("_")[-1] if "_" in addon_slug else addon_slug
+        device_name = f"Add-on ({addon_name})"
+    else:
+        device_name = f"VU1 Server ({connection_info})"
+    
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, device_identifier)},
         manufacturer="Streacom",
         model="VU1 Server",
-        name=f"VU1 Server ({connection_info})",
+        name=device_name,
         sw_version="1.0",
     )
 
