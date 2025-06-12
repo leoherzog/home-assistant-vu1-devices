@@ -242,6 +242,11 @@ class VU1APIClient:
         response = await self._request("GET", f"api/v0/dial/{dial_uid}/easing/get")
         return response.get("data", {})
 
+    async def provision_new_dials(self) -> Dict[str, Any]:
+        """Provision new dials that have been detected by the server."""
+        response = await self._request("GET", "api/v0/dial/provision")
+        return response.get("data", {})
+
 
 async def discover_vu1_addon() -> Dict[str, Any]:
     """Discover VU1 Server add-on via Home Assistant Supervisor API."""

@@ -27,12 +27,61 @@ async def async_setup_entry(
 
     entities = []
     
+    # Create provision new dials button for server device
+    entities.append(VU1ProvisionDialsButton(coordinator, client))
+    
     # Create refresh button for each dial
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
         entities.append(VU1RefreshHardwareInfoButton(coordinator, client, dial_uid, dial_info))
 
     async_add_entities(entities)
+
+
+class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
+    """Button to provision new dials detected by the VU1 server."""
+
+    def __init__(self, coordinator, client: VU1APIClient) -> None:
+        """Initialize the provision dials button."""
+        super().__init__(coordinator)
+        self._client = client
+        self._attr_unique_id = f"{coordinator.server_device_id}_provision_new_dials"
+        self._attr_name = "Provision new dials"
+        self._attr_has_entity_name = True
+        self._attr_entity_category = EntityCategory.CONFIG
+        self._attr_icon = "mdi:plus-circle"
+
+    @property
+    def device_info(self) -> Dict[str, Any]:
+        """Return device information for the VU1 server."""
+        return {
+            "identifiers": {(DOMAIN, self.coordinator.server_device_id)},
+            "name": self.coordinator.server_device_name,
+            "manufacturer": "Streacom",
+            "model": "VU1 Server",
+        }
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        try:
+            _LOGGER.info("Provisioning new dials via VU1 server")
+            
+            # Call the provision endpoint to detect and add new dials
+            result = await self._client.provision_new_dials()
+            
+            # Trigger coordinator refresh to discover any newly provisioned dials
+            await self.coordinator.async_request_refresh()
+            
+            _LOGGER.info("Successfully provisioned new dials: %s", result)
+            
+        except Exception as err:
+            _LOGGER.error("Failed to provision new dials: %s", err)
+            raise
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.last_update_success
 
 
 class VU1RefreshHardwareInfoButton(CoordinatorEntity, ButtonEntity):
