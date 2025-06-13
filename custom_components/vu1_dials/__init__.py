@@ -20,6 +20,7 @@ from .const import (
     CONF_PORT,
     CONF_API_KEY,
     DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_TIMEOUT,
     SERVICE_SET_DIAL_VALUE,
     SERVICE_SET_DIAL_BACKLIGHT,
     SERVICE_SET_DIAL_NAME,
@@ -255,6 +256,9 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up VU1 Dials from a config entry."""
     api_key = entry.data[CONF_API_KEY]
+    
+    # Get configurable timeout from options
+    timeout = entry.options.get("timeout", DEFAULT_TIMEOUT)
 
     # Create client based on connection type
     if entry.data.get("ingress"):
@@ -267,6 +271,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ingress_slug=entry.data["ingress_slug"],
             supervisor_token=entry.data["supervisor_token"],
             api_key=api_key,
+            timeout=timeout,
         )
         connection_info = f"ingress ({entry.data['ingress_slug']})"
         device_identifier = f"vu1_server_ingress_{entry.data['ingress_slug']}"
@@ -274,7 +279,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Direct connection
         host = entry.data[CONF_HOST]
         port = entry.data[CONF_PORT]
-        client = VU1APIClient(host, port, api_key)
+        client = VU1APIClient(host, port, api_key, timeout=timeout)
         connection_info = f"{host}:{port}"
         device_identifier = f"vu1_server_{host}_{port}"
 

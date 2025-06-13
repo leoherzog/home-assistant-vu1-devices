@@ -20,6 +20,7 @@ CONF_UPDATE_MODE = "update_mode"
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 5340
 DEFAULT_UPDATE_INTERVAL = 30
+DEFAULT_TIMEOUT = 10
 
 # Platforms
 PLATFORMS = ["sensor", "number", "switch", "light", "select", "button", "image"]

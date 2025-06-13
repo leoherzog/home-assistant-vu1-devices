@@ -28,6 +28,7 @@ class VU1APIClient:
         session: Optional[aiohttp.ClientSession] = None,
         ingress_slug: Optional[str] = None,
         supervisor_token: Optional[str] = None,
+        timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         """Initialize VU1 API client."""
         self.host = host
@@ -35,6 +36,7 @@ class VU1APIClient:
         self.api_key = api_key
         self.ingress_slug = ingress_slug
         self.supervisor_token = supervisor_token
+        self.timeout = timeout
         
         # Set base URL - always use provided host and port
         self.base_url = f"http://{host}:{port}"
@@ -53,7 +55,7 @@ class VU1APIClient:
         """Get aiohttp session."""
         if self._session is None:
             self._session = aiohttp.ClientSession(
-                timeout=ClientTimeout(total=DEFAULT_TIMEOUT)
+                timeout=ClientTimeout(total=self.timeout)
             )
             self._close_session = True
         return self._session
