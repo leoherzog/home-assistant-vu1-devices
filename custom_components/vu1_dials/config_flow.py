@@ -502,30 +502,21 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return await self.async_step_init()
 
         if user_input is not None:
-            # Handle the uploaded image
-            if image_file := user_input.get("image"):
+            # The image data is in user_input["image"] as bytes
+            if image_data := user_input.get("image"):
                 try:
-                    # Get the client
                     data = self.hass.data[DOMAIN][self.config_entry.entry_id]
                     client = data["client"]
-                    
-                    # Read the file content
-                    image_data = await self.hass.async_add_executor_job(
-                        self._read_uploaded_file, image_file
-                    )
-                    
-                    # Upload to the dial
+
                     _LOGGER.info("Uploading image to dial %s (%d bytes)", 
                                self._selected_dial, len(image_data))
                     await client.set_dial_image(self._selected_dial, image_data)
-                    
-                    # Refresh coordinator to show new image
+
                     coordinator = data["coordinator"]
                     await coordinator.async_request_refresh()
-                    
-                    # Return to main options
+
                     return self.async_create_entry(title="", data=self.config_entry.options)
-                    
+
                 except Exception as err:
                     _LOGGER.error("Failed to upload image: %s", err)
                     errors["base"] = "image_upload_failed"
@@ -559,13 +550,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             },
         )
 
-    def _read_uploaded_file(self, file_id: str) -> bytes:
-        """Read uploaded file content."""
-        # The file_id is the path to the uploaded file
-        # Home Assistant stores uploaded files temporarily
-        file_path = self.hass.config.path(f".storage/uploads/{file_id}")
-        with open(file_path, "rb") as f:
-            return f.read()
 
 
 class CannotConnect(HomeAssistantError):
