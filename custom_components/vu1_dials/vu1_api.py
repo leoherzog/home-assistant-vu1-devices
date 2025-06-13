@@ -213,10 +213,55 @@ class VU1APIClient:
 
     async def set_dial_image(self, dial_uid: str, image_data: bytes) -> None:
         """Set dial background image."""
-        # This endpoint might need special handling for file uploads
-        # Implementation depends on server API specifics
-        _ = dial_uid, image_data  # Suppress unused parameter warnings
-        raise NotImplementedError("Image upload not yet implemented")
+        self._validate_dial_uid(dial_uid)
+        
+        # Create multipart form data
+        data = aiohttp.FormData()
+        data.add_field('image', image_data, filename='background.png', content_type='image/png')
+        
+        url = f"{self.base_url}/api/v0/dial/{dial_uid}/image/set"
+        headers = {}
+        params = {}
+        
+        # Add authentication
+        if self.api_key:
+            params["key"] = self.api_key
+        
+        if self._use_ingress and self.supervisor_token:
+            headers["Authorization"] = f"Bearer {self.supervisor_token}"
+            headers["X-Ingress-Path"] = f"/api/v0/dial/{dial_uid}/image/set"
+        
+        try:
+            _LOGGER.debug("Uploading image for dial %s (%d bytes)", dial_uid, len(image_data))
+            async with self.session.post(url, data=data, headers=headers, params=params) as response:
+                _LOGGER.debug("Image upload response status: %s", response.status)
+                
+                if response.status >= 400:
+                    try:
+                        error_body = await response.text()
+                        _LOGGER.error("Image upload failed: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
+                    except:
+                        _LOGGER.error("Image upload failed with status %s", response.status)
+                    
+                response.raise_for_status()
+                
+                if response.content_type == "application/json":
+                    result = await response.json()
+                    if result.get("status") != "ok":
+                        raise VU1APIError(f"Failed to set image: {result.get('message', 'Unknown error')}")
+                    _LOGGER.info("Successfully uploaded image for dial %s", dial_uid)
+                    
+        except aiohttp.ClientResponseError as err:
+            if err.status == 401:
+                raise VU1APIError(f"Authentication failed: Invalid API key") from err
+            elif err.status == 403:
+                raise VU1APIError(f"Access forbidden: Invalid API key") from err
+            else:
+                raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
+        except (ClientError, asyncio.TimeoutError) as err:
+            raise VU1APIError(f"Connection error during image upload: {err}") from err
+        except Exception as err:
+            raise VU1APIError(f"Failed to upload image: {err}") from err
 
     async def reload_dial(self, dial_uid: str) -> None:
         """Reload dial configuration."""
