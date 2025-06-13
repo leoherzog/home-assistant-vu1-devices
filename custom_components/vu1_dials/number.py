@@ -9,7 +9,6 @@ from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 from .vu1_api import VU1APIClient
@@ -59,7 +58,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
+class VU1DialNumber(CoordinatorEntity, NumberEntity):
     """Representation of a VU1 dial number entity."""
 
     def __init__(
@@ -172,11 +171,6 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
     async def async_added_to_hass(self) -> None:
         """Run when entity is added to hass."""
         await super().async_added_to_hass()
-        
-        # Restore previous state if available
-        last_state = await self.async_get_last_state()
-        if last_state is not None and last_state.state != "unknown":
-            self._attr_native_value = float(last_state.state)
         
         # Registry event tracking removed due to compatibility issues
 
