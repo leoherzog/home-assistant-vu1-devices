@@ -281,8 +281,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 return await self.async_step_upload_image()
             
             # Check if user just selected update mode - redirect to appropriate step
-            if "update_mode" in user_input and len(user_input) == 1:
-                # User just selected mode, show appropriate next step
+            # Allow for configure_image being false as well (2 items total)
+            if "update_mode" in user_input and not user_input.get("configure_image", False):
+                # User just selected mode without image upload, show appropriate next step
                 self._dial_config_data = {"update_mode": user_input["update_mode"]}
                 if user_input["update_mode"] == "automatic":
                     return await self.async_step_configure_automatic()
@@ -316,7 +317,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 from .sensor_binding import async_get_binding_manager
                 binding_manager = async_get_binding_manager(self.hass)
                 coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-                if coordinator.data:
+                if binding_manager and coordinator.data:
                     dials_data = coordinator.data.get("dials", {})
                     if self._selected_dial in dials_data:
                         await binding_manager._update_binding(
@@ -399,7 +400,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 from .sensor_binding import async_get_binding_manager
                 binding_manager = async_get_binding_manager(self.hass)
                 coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-                if coordinator.data:
+                if binding_manager and coordinator.data:
                     dials_data = coordinator.data.get("dials", {})
                     if self._selected_dial in dials_data:
                         await binding_manager._update_binding(
@@ -477,7 +478,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             from .sensor_binding import async_get_binding_manager
             binding_manager = async_get_binding_manager(self.hass)
             coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-            if coordinator.data:
+            if binding_manager and coordinator.data:
                 dials_data = coordinator.data.get("dials", {})
                 if self._selected_dial in dials_data:
                     await binding_manager._update_binding(
