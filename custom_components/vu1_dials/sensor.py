@@ -103,44 +103,6 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         """When entity will be removed from hass."""
         await super().async_will_remove_from_hass()
 
-    @callback
-    def _async_entity_registry_updated(self, event) -> None:
-        """Handle entity registry update."""
-        registry = er.async_get(self.hass)
-        entity_entry = registry.async_get(self.entity_id)
-        
-        if entity_entry:
-            # Check if entity has a custom name or if it was reset to default
-            if entity_entry.name:
-                # Entity has a custom name set by user
-                new_name = entity_entry.name
-            else:
-                # Name was reset to default - use device name
-                device_registry = dr.async_get(self.hass)
-                device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
-                if device and device.name_by_user:
-                    new_name = device.name_by_user
-                else:
-                    # Fall back to server's dial name
-                    dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-                    new_name = dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}")
-            
-            if new_name != self._last_known_name:
-                self._last_known_name = new_name
-                self.hass.async_create_task(self._sync_name_to_server(new_name))
-
-    @callback
-    def _async_device_registry_updated(self, event) -> None:
-        """Handle device registry update."""
-        device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get(event.data["device_id"])
-        
-        if device and device.name_by_user:
-            # Device has a custom name set by user
-            new_name = device.name_by_user
-            if new_name != self._last_known_name:
-                self._last_known_name = new_name
-                self.hass.async_create_task(self._sync_name_to_server(new_name))
 
     async def _sync_name_to_server(self, name: str) -> None:
         """Sync the entity name to the VU1 server."""

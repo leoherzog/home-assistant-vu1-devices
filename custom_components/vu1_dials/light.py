@@ -10,7 +10,6 @@ from homeassistant.components.light import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -66,7 +65,6 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         # Configure color modes
         self._attr_supported_color_modes = {ColorMode.RGB}
         self._attr_color_mode = ColorMode.RGB
-        self._device_registry_updated_unsub = None
 
     @property
     def device_info(self) -> Dict[str, Any]:
@@ -204,12 +202,6 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
             # Trigger immediate state update
             self.async_schedule_update_ha_state()
 
-    @callback
-    def _async_device_registry_updated(self, event) -> None:
-        """Handle device registry update to sync name changes."""
-        # The device info property will automatically reflect the new name
-        # Just trigger a state update to refresh the UI
-        self.async_schedule_update_ha_state()
 
     @property
     def should_poll(self) -> bool:
