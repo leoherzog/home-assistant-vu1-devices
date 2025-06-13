@@ -378,12 +378,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if device:
             device_registry.async_remove_device(device.id)
         
-        # Remove services if this is the last entry
-        if not hass.data[DOMAIN]:
-            for service in [SERVICE_SET_DIAL_VALUE, SERVICE_SET_DIAL_BACKLIGHT, 
-                          SERVICE_SET_DIAL_NAME, SERVICE_RELOAD_DIAL, SERVICE_CALIBRATE_DIAL]:
-                if hass.services.has_service(DOMAIN, service):
-                    hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
 
