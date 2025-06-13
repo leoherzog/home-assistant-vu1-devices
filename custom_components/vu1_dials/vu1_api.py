@@ -217,7 +217,7 @@ class VU1APIClient:
         
         # Create multipart form data
         data = aiohttp.FormData()
-        data.add_field('image', image_data, filename='background.png', content_type='image/png')
+        data.add_field('imgfile', image_data, filename='background.png', content_type='image/png')
         
         url = f"{self.base_url}/api/v0/dial/{dial_uid}/image/set"
         headers = {}
