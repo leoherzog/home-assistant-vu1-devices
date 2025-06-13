@@ -153,7 +153,57 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
     config_manager = async_get_config_manager(hass)
     await config_manager.async_update_dial_config(dial_uid, dial_config)
     
-    _LOGGER.info("Updated configuration for dial %s", dial_uid)
+    # Get the client and coordinator to apply changes immediately
+    client = None
+    coordinator = None
+    for entry_data in hass.data[DOMAIN].values():
+        coord = entry_data["coordinator"]
+        if coord.data and dial_uid in coord.data.get("dials", {}):
+            client = entry_data["client"]
+            coordinator = coord
+            break
+    
+    if not client:
+        _LOGGER.error("Could not find client for dial %s", dial_uid)
+        return
+    
+    # Apply changes to physical device immediately
+    try:
+        # Apply backlight color if specified
+        if CONF_BACKLIGHT_COLOR in config:
+            backlight_color = config[CONF_BACKLIGHT_COLOR]
+            await client.set_dial_backlight(dial_uid, backlight_color[0], backlight_color[1], backlight_color[2])
+            _LOGGER.debug("Applied backlight color %s to dial %s", backlight_color, dial_uid)
+        
+        # Apply easing settings if specified
+        final_config = config_manager.get_dial_config(dial_uid)
+        if CONF_DIAL_EASING in config:
+            dial_period = final_config.get("dial_easing_period", 50)
+            dial_step = final_config.get("dial_easing_step", 5)
+            await client.set_dial_easing(dial_uid, dial_period, dial_step)
+            _LOGGER.debug("Applied dial easing to dial %s: period=%s, step=%s", dial_uid, dial_period, dial_step)
+        
+        if CONF_BACKLIGHT_EASING in config:
+            backlight_period = final_config.get("backlight_easing_period", 50)
+            backlight_step = final_config.get("backlight_easing_step", 5)
+            await client.set_backlight_easing(dial_uid, backlight_period, backlight_step)
+            _LOGGER.debug("Applied backlight easing to dial %s: period=%s, step=%s", dial_uid, backlight_period, backlight_step)
+        
+        # Update sensor bindings if binding-related keys changed
+        binding_keys = {CONF_BOUND_ENTITY, CONF_VALUE_MIN, CONF_VALUE_MAX, CONF_UPDATE_MODE}
+        if any(key in config for key in binding_keys):
+            from .sensor_binding import async_get_binding_manager
+            binding_manager = async_get_binding_manager(hass)
+            dials_data = coordinator.data.get("dials", {})
+            if dial_uid in dials_data:
+                await binding_manager._update_binding(dial_uid, final_config, dials_data[dial_uid])
+                _LOGGER.debug("Updated sensor binding for dial %s", dial_uid)
+        
+    except Exception as err:
+        _LOGGER.error("Failed to apply device action changes to dial %s: %s", dial_uid, err)
+        raise
+    
+    _LOGGER.info("Updated and applied configuration for dial %s", dial_uid)
 
 
 async def _get_dial_uid_for_device(hass: HomeAssistant, device_id: str) -> str:
