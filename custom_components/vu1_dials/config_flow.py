@@ -385,35 +385,41 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return await self.async_step_configure_dial()
 
         if user_input is not None:
-            try:
-                # Merge with mode from previous step
-                processed_config = {
-                    "update_mode": "automatic",
-                    "bound_entity": user_input.get("bound_entity") or None,
-                    "value_min": user_input.get("value_min", 0),
-                    "value_max": user_input.get("value_max", 100),
-                }
-                
-                await config_manager.async_update_dial_config(self._selected_dial, processed_config)
-                
-                # Update sensor bindings
-                from .sensor_binding import async_get_binding_manager
-                binding_manager = async_get_binding_manager(self.hass)
-                coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-                if binding_manager and coordinator.data:
-                    dials_data = coordinator.data.get("dials", {})
-                    if self._selected_dial in dials_data:
-                        await binding_manager._update_binding(
-                            self._selected_dial, 
-                            processed_config, 
-                            dials_data[self._selected_dial]
-                        )
-                
-                return self.async_create_entry(title="", data=self.config_entry.options)
-                
-            except Exception as err:
-                _LOGGER.error("Failed to update dial configuration: %s", err)
-                errors["base"] = "config_update_failed"
+            # Validate min < max
+            value_min = user_input.get("value_min", 0)
+            value_max = user_input.get("value_max", 100)
+            if value_min >= value_max:
+                errors["base"] = "value_min_greater_than_max"
+            else:
+                try:
+                    # Merge with mode from previous step
+                    processed_config = {
+                        "update_mode": "automatic",
+                        "bound_entity": user_input.get("bound_entity") or None,
+                        "value_min": value_min,
+                        "value_max": value_max,
+                    }
+                    
+                    await config_manager.async_update_dial_config(self._selected_dial, processed_config)
+                    
+                    # Update sensor bindings
+                    from .sensor_binding import async_get_binding_manager
+                    binding_manager = async_get_binding_manager(self.hass)
+                    coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+                    if binding_manager and coordinator.data:
+                        dials_data = coordinator.data.get("dials", {})
+                        if self._selected_dial in dials_data:
+                            await binding_manager._update_binding(
+                                self._selected_dial, 
+                                processed_config, 
+                                dials_data[self._selected_dial]
+                            )
+                    
+                    return self.async_create_entry(title="", data=self.config_entry.options)
+                    
+                except Exception as err:
+                    _LOGGER.error("Failed to update dial configuration: %s", err)
+                    errors["base"] = "config_update_failed"
 
         # Get dial info for display
         coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
@@ -436,11 +442,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(
                 "value_min", 
                 default=current_config.get("value_min", 0)
-            ): vol.All(vol.Coerce(float), vol.Range(min=-1000, max=1000)),
+            ): vol.Coerce(float),
             vol.Optional(
                 "value_max", 
                 default=current_config.get("value_max", 100)
-            ): vol.All(vol.Coerce(float), vol.Range(min=-1000, max=1000)),
+            ): vol.Coerce(float),
         })
 
         return self.async_show_form(
