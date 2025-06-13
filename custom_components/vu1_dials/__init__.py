@@ -222,19 +222,25 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         current_config = config_manager.get_dial_config(dial_uid)
         
         # Check if server values differ from HA config
-        # Convert string periods to int if needed
+        # Convert string values to int if needed for consistent comparison
         dial_period = easing_config.get("dial_period", 50)
         if isinstance(dial_period, str):
             dial_period = int(dial_period)
         backlight_period = easing_config.get("backlight_period", 50)
         if isinstance(backlight_period, str):
             backlight_period = int(backlight_period)
+        dial_step = easing_config.get("dial_step", 5)
+        if isinstance(dial_step, str):
+            dial_step = int(dial_step)
+        backlight_step = easing_config.get("backlight_step", 5)
+        if isinstance(backlight_step, str):
+            backlight_step = int(backlight_step)
             
         server_values = {
             "dial_easing_period": dial_period,
-            "dial_easing_step": easing_config.get("dial_step", 5),
+            "dial_easing_step": dial_step,
             "backlight_easing_period": backlight_period,
-            "backlight_easing_step": easing_config.get("backlight_step", 5),
+            "backlight_easing_step": backlight_step,
         }
         
         config_changed = False
