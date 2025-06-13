@@ -37,7 +37,8 @@
   "options": {
     "error": {
       "config_error": "Failed to load device configuration",
-      "config_update_failed": "Failed to update dial configuration"
+      "config_update_failed": "Failed to update dial configuration",
+      "image_upload_failed": "Failed to upload image to dial"
     },
     "step": {
       "init": {
@@ -50,17 +51,17 @@
       },
       "configure_dial": {
         "title": "Configure Dial",
-        "description": "Set up sensor binding and dial behavior for {dial_name}",
+        "description": "Configure {dial_name}\n\nCurrent background: {current_image}\n\n{info}",
         "data": {
-          "bound_entity": "Bind to sensor (optional)",
-          "value_min": "Minimum sensor value",
-          "value_max": "Maximum sensor value", 
           "update_mode": "Update mode",
-          "backlight_red": "Backlight Red (0-100)",
-          "backlight_green": "Backlight Green (0-100)",
-          "backlight_blue": "Backlight Blue (0-100)",
-          "dial_easing": "Dial animation easing",
-          "backlight_easing": "Backlight animation easing"
+          "configure_image": "Upload custom background image"
+        }
+      },
+      "upload_image": {
+        "title": "Upload Background Image",
+        "description": "Upload a custom background for {dial_name}\n\nCurrent image: {current_image}\n\n{info}",
+        "data": {
+          "image": "Select image file"
         }
       }
     }
