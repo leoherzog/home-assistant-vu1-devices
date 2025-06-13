@@ -289,48 +289,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     return await self.async_step_configure_automatic()
                 else:
                     return await self.async_step_configure_manual()
-            
-            try:
-                # Process and save configuration
-                processed_config = {
-                    "update_mode": user_input.get("update_mode", "manual"),
-                }
-                
-                # Only include bound entity and ranges for automatic mode
-                if user_input.get("update_mode") == "automatic":
-                    processed_config.update({
-                        "bound_entity": user_input.get("bound_entity") or None,
-                        "value_min": user_input.get("value_min", 0),
-                        "value_max": user_input.get("value_max", 100),
-                    })
-                else:
-                    # Clear bound entity for manual mode
-                    processed_config.update({
-                        "bound_entity": None,
-                        "value_min": 0,
-                        "value_max": 100,
-                    })
-                
-                await config_manager.async_update_dial_config(self._selected_dial, processed_config)
-                
-                # Update sensor bindings
-                from .sensor_binding import async_get_binding_manager
-                binding_manager = async_get_binding_manager(self.hass)
-                coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-                if binding_manager and coordinator.data:
-                    dials_data = coordinator.data.get("dials", {})
-                    if self._selected_dial in dials_data:
-                        await binding_manager._update_binding(
-                            self._selected_dial, 
-                            processed_config, 
-                            dials_data[self._selected_dial]
-                        )
-                
-                return self.async_create_entry(title="", data=self.config_entry.options)
-                
-            except Exception as err:
-                _LOGGER.error("Failed to update dial configuration: %s", err)
-                errors["base"] = "config_update_failed"
 
         # Get dial info for display
         coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]

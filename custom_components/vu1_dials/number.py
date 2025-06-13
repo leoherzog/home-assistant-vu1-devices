@@ -177,10 +177,3 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from hass."""
         await super().async_will_remove_from_hass()
-
-    @callback
-    def _async_device_registry_updated(self, event) -> None:
-        """Handle device registry update to sync name changes."""
-        # The device info property will automatically reflect the new name
-        # Just trigger a state update to refresh the UI
-        self.async_schedule_update_ha_state()
