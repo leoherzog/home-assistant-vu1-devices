@@ -38,7 +38,8 @@
     "error": {
       "config_error": "Failed to load device configuration",
       "config_update_failed": "Failed to update dial configuration",
-      "image_upload_failed": "Failed to upload image to dial"
+      "image_upload_failed": "Failed to upload image to dial",
+      "value_min_greater_than_max": "Minimum value must be less than maximum value"
     },
     "step": {
       "init": {

@@ -27,25 +27,35 @@ _LOGGER = logging.getLogger(__name__)
 
 ACTION_CONFIGURE_DIAL = "configure_dial"
 
-CONFIGURE_DIAL_ACTION_SCHEMA = vol.Schema(
-    {
-        vol.Required("type"): ACTION_CONFIGURE_DIAL,
-        vol.Required("device_id"): cv.string,
-        vol.Optional(CONF_BOUND_ENTITY): cv.entity_id,
-        vol.Optional(CONF_VALUE_MIN, default=DEFAULT_VALUE_MIN): vol.All(
-            vol.Coerce(float), vol.Range(min=0, max=100)
-        ),
-        vol.Optional(CONF_VALUE_MAX, default=DEFAULT_VALUE_MAX): vol.All(
-            vol.Coerce(float), vol.Range(min=0, max=100)
-        ),
-        vol.Optional(CONF_BACKLIGHT_COLOR, default=DEFAULT_BACKLIGHT_COLOR): vol.All(
-            vol.Length(min=3, max=3),
-            [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
-        ),
-        vol.Optional(CONF_DIAL_EASING, default="linear"): cv.string,
-        vol.Optional(CONF_BACKLIGHT_EASING, default="linear"): cv.string,
-        vol.Optional(CONF_UPDATE_MODE, default="manual"): vol.In([UPDATE_MODE_AUTOMATIC, "manual"]),
-    }
+
+def validate_min_max_range(config):
+    """Validate that value_min < value_max if both are provided."""
+    value_min = config.get(CONF_VALUE_MIN)
+    value_max = config.get(CONF_VALUE_MAX)
+    
+    if value_min is not None and value_max is not None and value_min >= value_max:
+        raise vol.Invalid(f"value_min ({value_min}) must be less than value_max ({value_max})")
+    
+    return config
+
+CONFIGURE_DIAL_ACTION_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Required("type"): ACTION_CONFIGURE_DIAL,
+            vol.Required("device_id"): cv.string,
+            vol.Optional(CONF_BOUND_ENTITY): cv.entity_id,
+            vol.Optional(CONF_VALUE_MIN, default=DEFAULT_VALUE_MIN): vol.Coerce(float),
+            vol.Optional(CONF_VALUE_MAX, default=DEFAULT_VALUE_MAX): vol.Coerce(float),
+            vol.Optional(CONF_BACKLIGHT_COLOR, default=DEFAULT_BACKLIGHT_COLOR): vol.All(
+                vol.Length(min=3, max=3),
+                [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
+            ),
+            vol.Optional(CONF_DIAL_EASING, default="linear"): cv.string,
+            vol.Optional(CONF_BACKLIGHT_EASING, default="linear"): cv.string,
+            vol.Optional(CONF_UPDATE_MODE, default="manual"): vol.In([UPDATE_MODE_AUTOMATIC, "manual"]),
+        }
+    ),
+    validate_min_max_range,
 )
 
 
@@ -101,8 +111,8 @@ async def async_get_action_capabilities(
         return {
             "extra_fields": vol.Schema({
                 vol.Optional(CONF_BOUND_ENTITY): vol.In([e["value"] for e in entities]),
-                vol.Optional(CONF_VALUE_MIN): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
-                vol.Optional(CONF_VALUE_MAX): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+                vol.Optional(CONF_VALUE_MIN): vol.Coerce(float),
+                vol.Optional(CONF_VALUE_MAX): vol.Coerce(float),
                 vol.Optional(CONF_BACKLIGHT_COLOR): vol.All(
                     vol.Length(min=3, max=3),
                     [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
