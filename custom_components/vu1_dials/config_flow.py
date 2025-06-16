@@ -464,29 +464,75 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         errors: Dict[str, str] = {}
         
         if not self._selected_dial:
+            _LOGGER.error("No dial selected for image upload")
             return await self.async_step_init()
 
         if user_input is not None:
-            # The image data is in user_input["image"] as bytes
-            if image_data := user_input.get("image"):
+            _LOGGER.debug("User input received: %s", list(user_input.keys()))
+            
+            # The image data is in user_input["image"]
+            file_data = user_input.get("image")
+            
+            if file_data is not None:
                 try:
-                    data = self.hass.data[DOMAIN][self.config_entry.entry_id]
-                    client = data["client"]
+                    # Log what type of data we received
+                    _LOGGER.debug("File data type: %s", type(file_data))
+                    
+                    # In recent HA versions, FileSelector returns the file content directly as bytes
+                    if isinstance(file_data, bytes):
+                        image_data = file_data
+                    else:
+                        # Log the actual type for debugging
+                        _LOGGER.error(
+                            "Unexpected file data type: %s. Expected bytes but got %s. "
+                            "Data sample: %s", 
+                            type(file_data), 
+                            type(file_data).__name__,
+                            str(file_data)[:100] if file_data else "None"
+                        )
+                        raise ValueError(f"Expected bytes but got {type(file_data).__name__}")
+                    
+                    # Validate image data
+                    if not image_data:
+                        raise ValueError("Image data is empty")
+                    
+                    if len(image_data) < 100:  # Basic size check
+                        raise ValueError(f"Image too small ({len(image_data)} bytes)")
+                    
+                    # Log image header for debugging
+                    _LOGGER.debug("Image header (first 16 bytes): %s", image_data[:16].hex())
+                    
+                    # Get the client and upload the image
+                    data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+                    if not data:
+                        raise ValueError("Integration data not found")
+                    
+                    client = data.get("client")
+                    if not client:
+                        raise ValueError("VU1 client not found")
 
                     _LOGGER.info("Uploading image to dial %s (%d bytes)", 
                                self._selected_dial, len(image_data))
+                    
                     await client.set_dial_image(self._selected_dial, image_data)
 
-                    coordinator = data["coordinator"]
-                    await coordinator.async_request_refresh()
+                    # Refresh the coordinator to update the UI
+                    coordinator = data.get("coordinator")
+                    if coordinator:
+                        await coordinator.async_request_refresh()
 
                     return self.async_create_entry(title="", data=self.config_entry.options)
 
-                except Exception as err:
-                    _LOGGER.error("Failed to upload image: %s", err)
+                except ValueError as err:
+                    _LOGGER.error("Validation error during image upload: %s", err)
                     errors["base"] = "image_upload_failed"
+                except Exception as err:
+                    # Log full exception details for debugging
+                    _LOGGER.exception("Unexpected error during image upload: %s", err)
+                    errors["base"] = "unknown"
             else:
-                # No image selected, go back
+                # No image selected, go back to previous step
+                _LOGGER.debug("No image selected, returning to dial configuration")
                 return await self.async_step_configure_dial()
 
         # Get dial info for display
