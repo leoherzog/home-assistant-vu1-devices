@@ -38,7 +38,6 @@
     "error": {
       "config_error": "Failed to load device configuration",
       "config_update_failed": "Failed to update dial configuration",
-      "image_upload_failed": "Failed to upload image to dial",
       "value_min_greater_than_max": "Minimum value must be less than maximum value"
     },
     "step": {
@@ -52,17 +51,9 @@
       },
       "configure_dial": {
         "title": "Configure Dial",
-        "description": "Configure {dial_name}\n\nCurrent background: {current_image}\n\n{info}",
+        "description": "Configure {dial_name}\n\n{info}",
         "data": {
-          "update_mode": "Update mode",
-          "configure_image": "Upload custom background image"
-        }
-      },
-      "upload_image": {
-        "title": "Upload Background Image",
-        "description": "Upload a custom background for {dial_name}\n\nCurrent image: {current_image}\n\n{info}",
-        "data": {
-          "image": "Select image file"
+          "update_mode": "Update mode"
         }
       }
     }
