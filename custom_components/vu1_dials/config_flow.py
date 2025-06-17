@@ -352,15 +352,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     # Update sensor bindings
                     from .sensor_binding import async_get_binding_manager
                     binding_manager = async_get_binding_manager(self.hass)
-                    coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-                    if binding_manager and coordinator.data:
-                        dials_data = coordinator.data.get("dials", {})
-                        if self._selected_dial in dials_data:
-                            await binding_manager._update_binding(
-                                self._selected_dial, 
-                                processed_config, 
-                                dials_data[self._selected_dial]
-                            )
+                    if binding_manager:
+                        await binding_manager.async_reconfigure_dial_binding(self._selected_dial)
                     
                     return self.async_create_entry(title="", data=self.config_entry.options)
                     
@@ -430,15 +423,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             # Update sensor bindings (clears any existing binding)
             from .sensor_binding import async_get_binding_manager
             binding_manager = async_get_binding_manager(self.hass)
-            coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-            if binding_manager and coordinator.data:
-                dials_data = coordinator.data.get("dials", {})
-                if self._selected_dial in dials_data:
-                    await binding_manager._update_binding(
-                        self._selected_dial, 
-                        processed_config, 
-                        dials_data[self._selected_dial]
-                    )
+            if binding_manager:
+                await binding_manager.async_reconfigure_dial_binding(self._selected_dial)
             
             return self.async_create_entry(title="", data=self.config_entry.options)
             

@@ -276,6 +276,33 @@ class VU1SensorBindingManager:
                     return data["client"]
         return None
 
+    async def async_reconfigure_dial_binding(self, dial_uid: str) -> None:
+        """Reconfigure binding for a specific dial after configuration changes.
+        
+        This is the public method that should be called when a dial's configuration
+        has been updated and the binding needs to be refreshed.
+        """
+        # Get the updated configuration
+        config = self._config_manager.get_dial_config(dial_uid)
+        
+        # Find the dial data from the coordinator
+        dial_data = None
+        if DOMAIN in self.hass.data:
+            for entry_id, data in self.hass.data[DOMAIN].items():
+                if isinstance(data, dict) and "coordinator" in data:
+                    coordinator = data["coordinator"]
+                    if coordinator.data and dial_uid in coordinator.data.get("dials", {}):
+                        dial_data = coordinator.data["dials"][dial_uid]
+                        break
+        
+        if dial_data is None:
+            _LOGGER.warning("Could not find dial data for %s during reconfiguration", dial_uid)
+            return
+        
+        # Update the binding using our private method
+        await self._update_binding(dial_uid, config, dial_data)
+        _LOGGER.info("Reconfigured binding for dial %s", dial_uid)
+
     async def async_shutdown(self) -> None:
         """Shutdown the binding manager."""
         # Cancel all debouncers
