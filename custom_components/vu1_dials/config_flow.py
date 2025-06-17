@@ -201,7 +201,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._dials = []
         self._selected_dial = None
         self._dial_config_data = {}
-        self._pending_image = None  # Store uploaded image temporarily
 
     async def async_step_init(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -276,19 +275,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return await self.async_step_init()
 
         if user_input is not None:
-            # Check if user wants to upload image
-            if user_input.get("configure_image"):
-                return await self.async_step_upload_image()
-            
-            # Check if user just selected update mode - redirect to appropriate step
-            # Allow for configure_image being false as well (2 items total)
-            if "update_mode" in user_input and not user_input.get("configure_image", False):
-                # User just selected mode without image upload, show appropriate next step
-                self._dial_config_data = {"update_mode": user_input["update_mode"]}
-                if user_input["update_mode"] == "automatic":
-                    return await self.async_step_configure_automatic()
-                else:
-                    return await self.async_step_configure_manual()
+            # User selected update mode - redirect to appropriate step
+            if user_input["update_mode"] == "automatic":
+                return await self.async_step_configure_automatic()
+            else:
+                return await self.async_step_configure_manual()
 
         # Get dial info for display
         coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
@@ -296,7 +287,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         dial_data = dials_data.get(self._selected_dial, {})
         dial_name = dial_data.get("dial_name", self._selected_dial)
 
-        # Enhanced schema with image option
+        # Schema with update mode selection
         schema = vol.Schema({
             vol.Required(
                 "update_mode", 
@@ -309,7 +300,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     ]
                 )
             ),
-            vol.Optional("configure_image", default=False): selector.BooleanSelector(),
         })
 
         return self.async_show_form(
@@ -318,8 +308,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={
                 "dial_name": dial_name,
-                "info": "Choose how this dial should be updated. You can also upload a custom background image.",
-                "current_image": dial_data.get("image_file", "Default")
+                "info": "Choose how this dial should be updated."
             },
         )
 
@@ -457,109 +446,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             _LOGGER.error("Failed to update dial configuration: %s", err)
             return self.async_abort(reason="config_update_failed")
 
-    async def async_step_upload_image(
-        self, user_input: Optional[Dict[str, Any]] = None
-    ) -> FlowResult:
-        """Handle image upload for the dial."""
-        errors: Dict[str, str] = {}
-        
-        if not self._selected_dial:
-            _LOGGER.error("No dial selected for image upload")
-            return await self.async_step_init()
-
-        if user_input is not None:
-            _LOGGER.debug("User input received: %s", list(user_input.keys()))
-            
-            # The image data is in user_input["image"]
-            file_data = user_input.get("image")
-            
-            if file_data is not None:
-                try:
-                    # Log what type of data we received
-                    _LOGGER.debug("File data type: %s", type(file_data))
-                    
-                    # In recent HA versions, FileSelector returns the file content directly as bytes
-                    if isinstance(file_data, bytes):
-                        image_data = file_data
-                    else:
-                        # Log the actual type for debugging
-                        _LOGGER.error(
-                            "Unexpected file data type: %s. Expected bytes but got %s. "
-                            "Data sample: %s", 
-                            type(file_data), 
-                            type(file_data).__name__,
-                            str(file_data)[:100] if file_data else "None"
-                        )
-                        raise ValueError(f"Expected bytes but got {type(file_data).__name__}")
-                    
-                    # Validate image data
-                    if not image_data:
-                        raise ValueError("Image data is empty")
-                    
-                    if len(image_data) < 100:  # Basic size check
-                        raise ValueError(f"Image too small ({len(image_data)} bytes)")
-                    
-                    # Log image header for debugging
-                    _LOGGER.debug("Image header (first 16 bytes): %s", image_data[:16].hex())
-                    
-                    # Get the client and upload the image
-                    data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
-                    if not data:
-                        raise ValueError("Integration data not found")
-                    
-                    client = data.get("client")
-                    if not client:
-                        raise ValueError("VU1 client not found")
-
-                    _LOGGER.info("Uploading image to dial %s (%d bytes)", 
-                               self._selected_dial, len(image_data))
-                    
-                    await client.set_dial_image(self._selected_dial, image_data)
-
-                    # Refresh the coordinator to update the UI
-                    coordinator = data.get("coordinator")
-                    if coordinator:
-                        await coordinator.async_request_refresh()
-
-                    return self.async_create_entry(title="", data=self.config_entry.options)
-
-                except ValueError as err:
-                    _LOGGER.error("Validation error during image upload: %s", err)
-                    errors["base"] = "image_upload_failed"
-                except Exception as err:
-                    # Log full exception details for debugging
-                    _LOGGER.exception("Unexpected error during image upload: %s", err)
-                    errors["base"] = "unknown"
-            else:
-                # No image selected, go back to previous step
-                _LOGGER.debug("No image selected, returning to dial configuration")
-                return await self.async_step_configure_dial()
-
-        # Get dial info for display
-        coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-        dials_data = coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._selected_dial, {})
-        dial_name = dial_data.get("dial_name", self._selected_dial)
-
-        schema = vol.Schema({
-            vol.Optional("image"): selector.FileSelector(
-                selector.FileSelectorConfig(
-                    accept=".png,.jpg,.jpeg",
-                    multiple=False
-                )
-            ),
-        })
-
-        return self.async_show_form(
-            step_id="upload_image",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={
-                "dial_name": dial_name,
-                "info": "Upload a custom background image for this dial. Images should be 144x200 pixels in PNG or JPEG format.",
-                "current_image": dial_data.get("image_file", "Default")
-            },
-        )
 
 
 
