@@ -87,6 +87,9 @@
     "button": {
       "refresh_hardware_info": {
         "name": "Refresh hardware info"
+      },
+      "identify": {
+        "name": "Identify"
       }
     },
     "image": {
