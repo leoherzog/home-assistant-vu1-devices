@@ -144,13 +144,11 @@ class VU1BehaviorSelect(CoordinatorEntity, SelectEntity):
         # Update sensor bindings if needed
         from .sensor_binding import async_get_binding_manager
         binding_manager = async_get_binding_manager(self.hass)
-        dials_data = self.coordinator.data.get("dials", {})
-        if self._dial_uid in dials_data:
-            await binding_manager._update_binding(
-                self._dial_uid, 
-                config_updates, 
-                dials_data[self._dial_uid]
-            )
+        if binding_manager:
+            await binding_manager.async_reconfigure_dial_binding(self._dial_uid)
+        
+        # Request coordinator refresh to update state
+        await self.coordinator.async_request_refresh()
         
         _LOGGER.info("Applied %s behavior preset to dial %s", option, self._dial_uid)
 

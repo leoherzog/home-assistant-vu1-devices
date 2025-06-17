@@ -204,10 +204,12 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
         if any(key in config for key in binding_keys):
             from .sensor_binding import async_get_binding_manager
             binding_manager = async_get_binding_manager(hass)
-            dials_data = coordinator.data.get("dials", {})
-            if dial_uid in dials_data:
-                await binding_manager._update_binding(dial_uid, final_config, dials_data[dial_uid])
+            if binding_manager:
+                await binding_manager.async_reconfigure_dial_binding(dial_uid)
                 _LOGGER.debug("Updated sensor binding for dial %s", dial_uid)
+        
+        # Request coordinator refresh to update state
+        await coordinator.async_request_refresh()
         
     except Exception as err:
         _LOGGER.error("Failed to apply device action changes to dial %s: %s", dial_uid, err)
