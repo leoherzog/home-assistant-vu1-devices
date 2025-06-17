@@ -98,11 +98,73 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
         await super().async_added_to_hass()
+        
+        # Set up registry update listeners for bidirectional name sync
+        self._entity_registry_updated_unsub = self.hass.bus.async_listen(
+            "entity_registry_updated", self._async_entity_registry_updated
+        )
+        self._device_registry_updated_unsub = self.hass.bus.async_listen(
+            "device_registry_updated", self._async_device_registry_updated
+        )
 
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from hass."""
         await super().async_will_remove_from_hass()
+        
+        # Clean up registry update listeners
+        if self._entity_registry_updated_unsub:
+            self._entity_registry_updated_unsub()
+            self._entity_registry_updated_unsub = None
+        if self._device_registry_updated_unsub:
+            self._device_registry_updated_unsub()
+            self._device_registry_updated_unsub = None
 
+    async def _async_entity_registry_updated(self, event) -> None:
+        """Handle entity registry updates for name sync."""
+        # Check if this event is for our entity
+        if event.data.get("entity_id") != self.entity_id:
+            return
+            
+        # Check if name changed
+        changes = event.data.get("changes", {})
+        if "name" in changes or "original_name" in changes:
+            # Get new name from registry
+            from homeassistant.helpers import entity_registry as er
+            registry = er.async_get(self.hass)
+            entry = registry.async_get(self.entity_id)
+            if entry and entry.name:
+                new_name = entry.name
+                # Only sync if name actually changed and not in grace period
+                if new_name != self._last_known_name and not self.coordinator.is_in_grace_period(self._dial_uid):
+                    self._last_known_name = new_name
+                    await self._sync_name_to_server(new_name)
+
+    async def _async_device_registry_updated(self, event) -> None:
+        """Handle device registry updates for name sync."""
+        # Check if this event is for our device
+        device_id = event.data.get("device_id")
+        if not device_id:
+            return
+            
+        # Get our device info to compare
+        from homeassistant.helpers import device_registry as dr
+        registry = dr.async_get(self.hass)
+        device = registry.async_get(device_id)
+        if not device:
+            return
+            
+        # Check if this is our dial's device
+        dial_identifier = (DOMAIN, self._dial_uid)
+        if dial_identifier not in device.identifiers:
+            return
+            
+        # Check if name changed
+        changes = event.data.get("changes", {})
+        if "name" in changes and device.name:
+            # Only sync if name actually changed and not in grace period
+            if device.name != self._last_known_name and not self.coordinator.is_in_grace_period(self._dial_uid):
+                self._last_known_name = device.name
+                await self._sync_name_to_server(device.name)
 
     async def _sync_name_to_server(self, name: str) -> None:
         """Sync the entity name to the VU1 server."""
