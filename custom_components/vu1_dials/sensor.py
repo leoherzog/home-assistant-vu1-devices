@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback, Event
 from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -111,12 +111,18 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         await super().async_added_to_hass()
         
         # Set up registry update listeners for bidirectional name sync
-        self._entity_registry_updated_unsub = self.hass.bus.async_listen(
-            "entity_registry_updated", self._async_entity_registry_updated
+        # Use async_track_entity_registry_updated_event for entity changes
+        self._entity_registry_updated_unsub = er.async_track_entity_registry_updated_event(
+            self.hass, self.entity_id, self._async_entity_registry_updated
         )
-        self._device_registry_updated_unsub = self.hass.bus.async_listen(
-            "device_registry_updated", self._async_device_registry_updated
-        )
+        
+        # For device registry updates, we need to track by device id
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
+        if device:
+            self._device_registry_updated_unsub = dr.async_track_device_registry_updated_event(
+                self.hass, device.id, self._async_device_registry_updated
+            )
 
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from hass."""
@@ -130,64 +136,86 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
             self._device_registry_updated_unsub()
             self._device_registry_updated_unsub = None
 
-    async def _async_entity_registry_updated(self, event) -> None:
+    @callback
+    def _async_entity_registry_updated(self, event: Event) -> None:
         """Handle entity registry updates for name sync."""
-        # Check if this event is for our entity
-        if event.data.get("entity_id") != self.entity_id:
+        if not event.data:
             return
             
-        # Check if name changed
         changes = event.data.get("changes", {})
+        _LOGGER.debug("Entity registry update for %s: changes=%s", self.entity_id, changes)
+        
+        # Check if this is a name change
         if "name" in changes or "original_name" in changes:
-            # Get new name from registry
-            from homeassistant.helpers import entity_registry as er
-            registry = er.async_get(self.hass)
-            entry = registry.async_get(self.entity_id)
-            if entry and entry.name:
-                new_name = entry.name
-                # Only sync if name actually changed and not in grace period
-                if new_name != self._last_known_name and not self.coordinator.is_in_grace_period(self._dial_uid):
-                    # Mark grace period BEFORE attempting sync to prevent race conditions
-                    self.coordinator.mark_name_change_from_ha(self._dial_uid)
-                    
-                    # Attempt atomic name sync
-                    success = await self._sync_name_to_server(new_name)
-                    if success:
-                        # Only update local state if server sync succeeded
-                        self._last_known_name = new_name
+            # Schedule the async operation
+            self.hass.async_create_task(self._handle_entity_name_change())
 
-    async def _async_device_registry_updated(self, event) -> None:
+    async def _handle_entity_name_change(self) -> None:
+        """Handle entity name change asynchronously."""
+        # Get new name from registry
+        entity_registry = er.async_get(self.hass)
+        entry = entity_registry.async_get(self.entity_id)
+        
+        if not entry:
+            return
+            
+        # Determine the actual name to use
+        new_name = entry.name
+        if not new_name:
+            # If no custom name, check if original_name was updated
+            new_name = entry.original_name
+            
+        if not new_name:
+            return
+            
+        # Only sync if name actually changed and not in grace period
+        if new_name != self._last_known_name and not self.coordinator.is_in_grace_period(self._dial_uid):
+            _LOGGER.info("Entity name changed for %s: %s -> %s", self._dial_uid, self._last_known_name, new_name)
+            
+            # Mark grace period BEFORE attempting sync to prevent race conditions
+            self.coordinator.mark_name_change_from_ha(self._dial_uid)
+            
+            # Attempt atomic name sync
+            success = await self._sync_name_to_server(new_name)
+            if success:
+                # Only update local state if server sync succeeded
+                self._last_known_name = new_name
+
+    @callback
+    def _async_device_registry_updated(self, event: Event) -> None:
         """Handle device registry updates for name sync."""
-        # Check if this event is for our device
-        device_id = event.data.get("device_id")
-        if not device_id:
+        if not event.data:
             return
             
-        # Get our device info to compare
-        from homeassistant.helpers import device_registry as dr
-        registry = dr.async_get(self.hass)
-        device = registry.async_get(device_id)
-        if not device:
-            return
-            
-        # Check if this is our dial's device
-        dial_identifier = (DOMAIN, self._dial_uid)
-        if dial_identifier not in device.identifiers:
-            return
-            
-        # Check if name changed
         changes = event.data.get("changes", {})
-        if "name" in changes and device.name:
-            # Only sync if name actually changed and not in grace period
-            if device.name != self._last_known_name and not self.coordinator.is_in_grace_period(self._dial_uid):
-                # Mark grace period BEFORE attempting sync to prevent race conditions
-                self.coordinator.mark_name_change_from_ha(self._dial_uid)
-                
-                # Attempt atomic name sync
-                success = await self._sync_name_to_server(device.name)
-                if success:
-                    # Only update local state if server sync succeeded
-                    self._last_known_name = device.name
+        _LOGGER.debug("Device registry update for dial %s: changes=%s", self._dial_uid, changes)
+        
+        # Check if name changed
+        if "name" in changes:
+            # Schedule the async operation
+            self.hass.async_create_task(self._handle_device_name_change())
+
+    async def _handle_device_name_change(self) -> None:
+        """Handle device name change asynchronously."""
+        # Get device from registry
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device(identifiers={(DOMAIN, self._dial_uid)})
+        
+        if not device or not device.name:
+            return
+            
+        # Only sync if name actually changed and not in grace period
+        if device.name != self._last_known_name and not self.coordinator.is_in_grace_period(self._dial_uid):
+            _LOGGER.info("Device name changed for %s: %s -> %s", self._dial_uid, self._last_known_name, device.name)
+            
+            # Mark grace period BEFORE attempting sync to prevent race conditions
+            self.coordinator.mark_name_change_from_ha(self._dial_uid)
+            
+            # Attempt atomic name sync
+            success = await self._sync_name_to_server(device.name)
+            if success:
+                # Only update local state if server sync succeeded
+                self._last_known_name = device.name
 
     async def _sync_name_to_server(self, name: str) -> bool:
         """Sync the entity name to the VU1 server.
