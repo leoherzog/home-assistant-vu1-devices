@@ -229,19 +229,40 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         current_config = config_manager.get_dial_config(dial_uid)
         
         # Check if server values differ from HA config
-        # Convert string values to int if needed for consistent comparison
-        dial_period = easing_config.get("dial_period", 50)
-        if isinstance(dial_period, str):
-            dial_period = int(dial_period)
-        backlight_period = easing_config.get("backlight_period", 50)
-        if isinstance(backlight_period, str):
-            backlight_period = int(backlight_period)
-        dial_step = easing_config.get("dial_step", 5)
-        if isinstance(dial_step, str):
-            dial_step = int(dial_step)
-        backlight_step = easing_config.get("backlight_step", 5)
-        if isinstance(backlight_step, str):
-            backlight_step = int(backlight_step)
+        # Convert string values to int with proper error handling
+        def safe_int_conversion(value, default_value, field_name):
+            """Safely convert value to int with fallback to default."""
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                try:
+                    return int(value)
+                except ValueError:
+                    _LOGGER.warning(
+                        "Invalid %s value from server: %s, using default %s",
+                        field_name, value, default_value
+                    )
+                    return default_value
+            if value is None:
+                return default_value
+            _LOGGER.warning(
+                "Unexpected %s type from server: %s (%s), using default %s",
+                field_name, value, type(value), default_value
+            )
+            return default_value
+
+        dial_period = safe_int_conversion(
+            easing_config.get("dial_period", 50), 50, "dial_period"
+        )
+        backlight_period = safe_int_conversion(
+            easing_config.get("backlight_period", 50), 50, "backlight_period"
+        )
+        dial_step = safe_int_conversion(
+            easing_config.get("dial_step", 5), 5, "dial_step"
+        )
+        backlight_step = safe_int_conversion(
+            easing_config.get("backlight_step", 5), 5, "backlight_step"
+        )
             
         server_values = {
             "dial_easing_period": dial_period,
