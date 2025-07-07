@@ -107,6 +107,12 @@ class VU1SensorBindingManager:
             _LOGGER.debug("No client found for dial %s (integration may still be loading)", dial_uid)
             return
 
+        # Clean up any existing debouncer to prevent memory leaks
+        if existing_debouncer := self._debouncers.get(dial_uid):
+            _LOGGER.debug("Cleaning up existing debouncer for dial %s", dial_uid)
+            await existing_debouncer.async_shutdown()
+            del self._debouncers[dial_uid]
+
         # Store binding info
         self._bindings[dial_uid] = {
             "entity_id": entity_id,
