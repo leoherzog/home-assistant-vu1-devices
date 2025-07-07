@@ -191,6 +191,13 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             dial_uid, grace_end.isoformat()
         )
 
+    def is_in_grace_period(self, dial_uid: str) -> bool:
+        """Check if dial is currently in a grace period for name changes."""
+        grace_end = self._name_change_grace_periods.get(dial_uid)
+        if not grace_end:
+            return False
+        return datetime.now() < grace_end
+
     def mark_behavior_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a behavior change originated from HA to prevent sync loops."""
         grace_end = datetime.now() + timedelta(seconds=self._grace_period_seconds)
