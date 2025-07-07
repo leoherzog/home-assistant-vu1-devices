@@ -23,7 +23,7 @@ DEFAULT_UPDATE_INTERVAL = 30
 DEFAULT_TIMEOUT = 10
 
 # Platforms
-PLATFORMS = ["sensor", "number", "switch", "light", "select", "button", "image"]
+PLATFORMS = ["sensor", "number", "light", "select", "button", "image"]
 
 # Services
 SERVICE_SET_DIAL_VALUE = "set_dial_value"
