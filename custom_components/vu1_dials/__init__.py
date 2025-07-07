@@ -151,16 +151,23 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             
             if entity_id:
                 entity_entry = entity_registry.async_get(entity_id)
-                # Only update if not user-customized
-                if entity_entry and not entity_entry.name:
-                    entity_registry.async_update_entity(
-                        entity_id,
-                        original_name=new_name
-                    )
-                    _LOGGER.debug(
-                        "Updated entity original_name for %s to %s", 
-                        entity_id, new_name
-                    )
+                if entity_entry:
+                    if not entity_entry.name:
+                        # No custom name, update original_name
+                        entity_registry.async_update_entity(
+                            entity_id,
+                            original_name=new_name
+                        )
+                        _LOGGER.debug(
+                            "Updated entity original_name for %s to %s", 
+                            entity_id, new_name
+                        )
+                    else:
+                        # User has customized name, log but don't override
+                        _LOGGER.debug(
+                            "Skipping entity name update for %s - user has custom name: %s", 
+                            entity_id, entity_entry.name
+                        )
             
             # Update device name
             device_registry = dr.async_get(self.hass)
@@ -168,14 +175,21 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 identifiers={(DOMAIN, dial_uid)}
             )
             
-            if device and not device.name_by_user:
-                device_registry.async_update_device(
-                    device.id,
-                    name=new_name
-                )
-                _LOGGER.info(
-                    "Updated device name for %s to %s", dial_uid, new_name
-                )
+            if device:
+                if not device.name_by_user:
+                    device_registry.async_update_device(
+                        device.id,
+                        name=new_name
+                    )
+                    _LOGGER.info(
+                        "Updated device name for %s to %s", dial_uid, new_name
+                    )
+                else:
+                    # User has customized device name, log but don't override
+                    _LOGGER.debug(
+                        "Skipping device name update for %s - user has custom name: %s", 
+                        dial_uid, device.name_by_user
+                    )
                 
         except Exception as err:
             _LOGGER.error(
@@ -491,16 +505,24 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         dial_uid = call.data[ATTR_DIAL_UID]
         name = call.data[ATTR_NAME]
         
-        # Mark grace period to prevent sync loop
+        # Get client/coordinator but don't mark grace period yet
         result = _get_dial_client_and_coordinator(hass, dial_uid)
-        if result:
-            _, coordinator = result
-            coordinator.mark_name_change_from_ha(dial_uid)
+        if not result:
+            _LOGGER.error("Dial %s not found", dial_uid)
+            raise ValueError(f"Dial {dial_uid} not found")
+            
+        client, coordinator = result
         
-        await _execute_dial_service(
-            hass, dial_uid, "set dial name",
-            lambda client: client.set_dial_name(dial_uid, name)
-        )
+        # Mark grace period BEFORE attempting operation
+        coordinator.mark_name_change_from_ha(dial_uid)
+        
+        try:
+            await client.set_dial_name(dial_uid, name)
+            await coordinator.async_request_refresh()
+            _LOGGER.info("Service call: synced dial name '%s' to VU1 server for %s", name, dial_uid)
+        except Exception as err:
+            _LOGGER.error("Service call failed to set dial name for %s: %s", dial_uid, err)
+            raise
 
     async def reload_dial(call: ServiceCall) -> None:
         """Reload dial service."""
