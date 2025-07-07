@@ -141,9 +141,7 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
             
             # Update sensor bindings to remove the automatic binding
             binding_manager = async_get_binding_manager(self.hass)
-            dials_data = self.coordinator.data.get("dials", {})
-            dial_data = dials_data.get(self._dial_uid, {})
-            await binding_manager._update_binding(self._dial_uid, {"update_mode": "manual"}, dial_data)
+            await binding_manager.async_reconfigure_dial_binding(self._dial_uid)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:

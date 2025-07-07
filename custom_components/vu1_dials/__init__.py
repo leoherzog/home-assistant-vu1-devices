@@ -216,40 +216,26 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         current_config = config_manager.get_dial_config(dial_uid)
         
         # Check if server values differ from HA config
-        # Convert string values to int with proper error handling
-        def safe_int_conversion(value, default_value, field_name):
-            """Safely convert value to int with fallback to default."""
-            if isinstance(value, int):
-                return value
-            if isinstance(value, str):
-                try:
-                    return int(value)
-                except ValueError:
-                    _LOGGER.warning(
-                        "Invalid %s value from server: %s, using default %s",
-                        field_name, value, default_value
-                    )
-                    return default_value
-            if value is None:
-                return default_value
-            _LOGGER.warning(
-                "Unexpected %s type from server: %s (%s), using default %s",
-                field_name, value, type(value), default_value
-            )
-            return default_value
-
-        dial_period = safe_int_conversion(
-            easing_config.get("dial_period", 50), 50, "dial_period"
-        )
-        backlight_period = safe_int_conversion(
-            easing_config.get("backlight_period", 50), 50, "backlight_period"
-        )
-        dial_step = safe_int_conversion(
-            easing_config.get("dial_step", 5), 5, "dial_step"
-        )
-        backlight_step = safe_int_conversion(
-            easing_config.get("backlight_step", 5), 5, "backlight_step"
-        )
+        # Convert values to int with proper error handling
+        try:
+            dial_period = int(easing_config.get("dial_period", 50))
+        except (ValueError, TypeError):
+            dial_period = 50
+            
+        try:
+            backlight_period = int(easing_config.get("backlight_period", 50))
+        except (ValueError, TypeError):
+            backlight_period = 50
+            
+        try:
+            dial_step = int(easing_config.get("dial_step", 5))
+        except (ValueError, TypeError):
+            dial_step = 5
+            
+        try:
+            backlight_step = int(easing_config.get("backlight_step", 5))
+        except (ValueError, TypeError):
+            backlight_step = 5
             
         server_values = {
             "dial_easing_period": dial_period,
@@ -273,78 +259,6 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             await config_manager.async_update_dial_config(dial_uid, updated_config)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
     
-    async def async_setup_device_tracking(self) -> None:
-        """Set up device registry tracking for bidirectional name sync."""
-        from homeassistant.helpers import device_registry as dr
-        
-        device_registry = dr.async_get(self.hass)
-        
-        # Get all dial devices and set up tracking for each
-        if self.data and "dials" in self.data:
-            for dial_uid in self.data["dials"]:
-                device = device_registry.async_get_device(
-                    identifiers={(DOMAIN, dial_uid)}
-                )
-                if device:
-                    # Track this specific device for name changes
-                    dr.async_track_device_registry_updated_event(
-                        self.hass,
-                        device.id,
-                        self._async_device_registry_updated,
-                    )
-        
-    @callback
-    def _async_device_registry_updated(self, event) -> None:
-        """Handle device registry updates for bidirectional sync."""
-        if not event.data:
-            return
-            
-        changes = event.data.get("changes", {})
-        device_id = event.data.get("device_id")
-        
-        if "name" in changes and device_id:
-            # Schedule async processing
-            self.hass.async_create_task(self._handle_device_name_change(device_id))
-    
-    async def _handle_device_name_change(self, device_id: str) -> None:
-        """Handle device name change from HA to server."""
-        from homeassistant.helpers import device_registry as dr
-        
-        device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get(device_id)
-        
-        if not device or not device.name:
-            return
-            
-        # Find which dial this device belongs to
-        dial_uid = None
-        for identifier in device.identifiers:
-            if identifier[0] == DOMAIN and identifier[1] != self.server_device_id:
-                dial_uid = identifier[1]
-                break
-                
-        if not dial_uid:
-            return
-            
-        # Only sync if not in grace period and name actually changed
-        if not self.is_in_grace_period(dial_uid):
-            previous_name = self._previous_dial_names.get(dial_uid)
-            if device.name != previous_name:
-                _LOGGER.info("Device name changed in HA for %s: %s -> %s", dial_uid, previous_name, device.name)
-                
-                # Mark grace period BEFORE sync
-                self.mark_name_change_from_ha(dial_uid)
-                
-                # Sync to server
-                try:
-                    await self.client.set_dial_name(dial_uid, device.name)
-                    _LOGGER.info("Synced device name to server: %s -> %s", dial_uid, device.name)
-                    # Update our tracking
-                    self._previous_dial_names[dial_uid] = device.name
-                    # Trigger refresh to sync back any server changes
-                    await self.async_request_refresh()
-                except Exception as err:
-                    _LOGGER.error("Failed to sync device name to server for %s: %s", dial_uid, err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -448,9 +362,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if coordinator.data:
         dials_data = coordinator.data.get("dials", {})
         await binding_manager.async_update_bindings(dials_data)
-        
-    # Set up device registry tracking for bidirectional name sync
-    await coordinator.async_setup_device_tracking()
 
     return True
 
@@ -470,12 +381,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Remove server device from registry
         device_registry = dr.async_get(hass)
-        if entry.data.get("ingress"):
-            device_identifier = f"vu1_server_ingress_{entry.data['ingress_slug']}"
-        else:
-            device_identifier = f"vu1_server_{entry.data[CONF_HOST]}_{entry.data[CONF_PORT]}"
-        
-        server_device_id = (DOMAIN, device_identifier)
+        coordinator = data["coordinator"]
+        server_device_id = (DOMAIN, coordinator.server_device_id)
         device = device_registry.async_get_device(identifiers={server_device_id})
         if device:
             device_registry.async_remove_device(device.id)

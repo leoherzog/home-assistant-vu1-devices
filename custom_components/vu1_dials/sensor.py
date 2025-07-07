@@ -173,43 +173,6 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
 
         return attributes
 
-    async def async_set_dial_value(self, value: int) -> None:
-        """Set the dial value."""
-        try:
-            await self._client.set_dial_value(self._dial_uid, value)
-            # Trigger coordinator refresh to update state
-            await self.coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Failed to set dial value for %s: %s", self._dial_uid, err)
-
-    async def async_set_dial_backlight(self, red: int, green: int, blue: int) -> None:
-        """Set the dial backlight."""
-        try:
-            await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
-            # Trigger coordinator refresh to update state
-            await self.coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Failed to set dial backlight for %s: %s", self._dial_uid, err)
-
-
-    async def async_reload_dial(self) -> None:
-        """Reload the dial configuration."""
-        try:
-            await self._client.reload_dial(self._dial_uid)
-            # Trigger coordinator refresh to update state
-            await self.coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Failed to reload dial %s: %s", self._dial_uid, err)
-
-    async def async_calibrate_dial(self) -> None:
-        """Calibrate the dial."""
-        try:
-            await self._client.calibrate_dial(self._dial_uid)
-            # Trigger coordinator refresh to update state
-            await self.coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Failed to calibrate dial %s: %s", self._dial_uid, err)
-
 
 class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
     """Base class for VU1 diagnostic sensors."""

@@ -79,7 +79,7 @@ class VU1DialConfigManager:
             CONF_BOUND_ENTITY: None,
             CONF_VALUE_MIN: DEFAULT_VALUE_MIN,
             CONF_VALUE_MAX: DEFAULT_VALUE_MAX,
-            CONF_BACKLIGHT_COLOR: DEFAULT_BACKLIGHT_COLOR.copy(),
+            CONF_BACKLIGHT_COLOR: list(DEFAULT_BACKLIGHT_COLOR),  # Convert tuple to list for storage
             CONF_DIAL_EASING: "linear",
             CONF_BACKLIGHT_EASING: "linear",
             CONF_UPDATE_MODE: DEFAULT_UPDATE_MODE,
@@ -120,15 +120,16 @@ class VU1DialConfigManager:
         if validated[CONF_VALUE_MIN] > validated[CONF_VALUE_MAX]:
             validated[CONF_VALUE_MIN], validated[CONF_VALUE_MAX] = validated[CONF_VALUE_MAX], validated[CONF_VALUE_MIN]
         
-        # Validate backlight_color
+        # Validate backlight_color (accept both list and tuple for compatibility)
         color = validated.get(CONF_BACKLIGHT_COLOR)
-        if isinstance(color, list) and len(color) == 3:
+        if isinstance(color, (list, tuple)) and len(color) == 3:
             try:
+                # Always store as list for JSON compatibility
                 validated[CONF_BACKLIGHT_COLOR] = [max(0, min(100, int(c))) for c in color]
             except (ValueError, TypeError):
-                validated[CONF_BACKLIGHT_COLOR] = defaults[CONF_BACKLIGHT_COLOR]
+                validated[CONF_BACKLIGHT_COLOR] = list(defaults[CONF_BACKLIGHT_COLOR])
         else:
-            validated[CONF_BACKLIGHT_COLOR] = defaults[CONF_BACKLIGHT_COLOR]
+            validated[CONF_BACKLIGHT_COLOR] = list(defaults[CONF_BACKLIGHT_COLOR])
 
         # Validate update_mode
         if validated.get(CONF_UPDATE_MODE) not in [UPDATE_MODE_AUTOMATIC, "manual"]:

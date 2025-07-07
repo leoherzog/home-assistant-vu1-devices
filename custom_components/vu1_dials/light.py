@@ -1,7 +1,7 @@
 """Support for VU1 dial backlight light entities."""
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, List, Tuple
 
 from homeassistant.components.light import (
     LightEntity,
