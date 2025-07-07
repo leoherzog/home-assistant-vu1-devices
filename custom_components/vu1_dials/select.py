@@ -103,12 +103,23 @@ class VU1BehaviorSelect(CoordinatorEntity, SelectEntity):
         for preset_key, preset_data in BEHAVIOR_PRESETS.items():
             if preset_key == "custom":
                 continue
+            
+            # Convert both config and preset values to int for comparison
+            # to handle cases where config values might be stored as strings
+            try:
+                config_dial_period = int(config.get("dial_easing_period", 50))
+                config_dial_step = int(config.get("dial_easing_step", 5))
+                config_backlight_period = int(config.get("backlight_easing_period", 50))
+                config_backlight_step = int(config.get("backlight_easing_step", 5))
                 
-            if (config.get("dial_easing_period") == preset_data["dial_easing_period"] and
-                config.get("dial_easing_step") == preset_data["dial_easing_step"] and
-                config.get("backlight_easing_period") == preset_data["backlight_easing_period"] and
-                config.get("backlight_easing_step") == preset_data["backlight_easing_step"]):
-                return preset_data["name"]
+                if (config_dial_period == preset_data["dial_easing_period"] and
+                    config_dial_step == preset_data["dial_easing_step"] and
+                    config_backlight_period == preset_data["backlight_easing_period"] and
+                    config_backlight_step == preset_data["backlight_easing_step"]):
+                    return preset_data["name"]
+            except (ValueError, TypeError):
+                # If any conversion fails, skip this preset comparison
+                continue
         
         return "Custom"
 
