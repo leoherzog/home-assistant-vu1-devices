@@ -347,16 +347,28 @@ async def discover_vu1_addon() -> Dict[str, Any]:
                                             "supervisor_token": supervisor_token
                                         }
                                     else:
-                                        # No ingress, try direct connection via hostname
-                                        repo = addon.get("repository", "local")
-                                        hostname = f"{repo}_{slug}".replace("_", "-")
-                                        
-                                        _LOGGER.debug("Found VU1 Server add-on without ingress: %s", hostname)
-                                        return {
-                                            "host": hostname,
-                                            "port": DEFAULT_PORT,
-                                            "addon_discovered": True
-                                        }
+                                        # No ingress, use the IP address provided by Supervisor API
+                                        addon_ip = addon_data.get("ip_address")
+                                        if addon_ip:
+                                            _LOGGER.debug("Found VU1 Server add-on without ingress, using IP: %s", addon_ip)
+                                            return {
+                                                "host": addon_ip,
+                                                "port": DEFAULT_PORT,
+                                                "addon_discovered": True
+                                            }
+                                        else:
+                                            # Fallback: construct hostname (less reliable)
+                                            repo = addon.get("repository", "local")
+                                            hostname = f"{repo}_{slug}".replace("_", "-")
+                                            _LOGGER.warning(
+                                                "No IP address found for add-on, falling back to constructed hostname: %s", 
+                                                hostname
+                                            )
+                                            return {
+                                                "host": hostname,
+                                                "port": DEFAULT_PORT,
+                                                "addon_discovered": True
+                                            }
                                 else:
                                     _LOGGER.debug("Failed to get detailed add-on info")
                                     return {}
