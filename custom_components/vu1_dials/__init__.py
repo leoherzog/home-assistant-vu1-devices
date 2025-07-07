@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -135,41 +135,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 "Server name changed for %s: %s -> %s", 
                 dial_uid, previous_name, server_name
             )
-            await self._update_ha_name(dial_uid, server_name)
+            await self._update_ha_device_name(dial_uid, server_name)
             
         # Store current name for next comparison
         self._previous_dial_names[dial_uid] = server_name
         
-    async def _update_ha_name(self, dial_uid: str, new_name: str) -> None:
-        """Update entity and device names in Home Assistant."""
+    async def _update_ha_device_name(self, dial_uid: str, new_name: str) -> None:
+        """Update device name in Home Assistant from server changes."""
         try:
-            # Update entity name
-            entity_registry = er.async_get(self.hass)
-            entity_id = entity_registry.async_get_entity_id(
-                "sensor", DOMAIN, f"{DOMAIN}_{dial_uid}"
-            )
-            
-            if entity_id:
-                entity_entry = entity_registry.async_get(entity_id)
-                if entity_entry:
-                    if not entity_entry.name:
-                        # No custom name, update original_name
-                        entity_registry.async_update_entity(
-                            entity_id,
-                            original_name=new_name
-                        )
-                        _LOGGER.debug(
-                            "Updated entity original_name for %s to %s", 
-                            entity_id, new_name
-                        )
-                    else:
-                        # User has customized name, log but don't override
-                        _LOGGER.debug(
-                            "Skipping entity name update for %s - user has custom name: %s", 
-                            entity_id, entity_entry.name
-                        )
-            
-            # Update device name
             device_registry = dr.async_get(self.hass)
             device = device_registry.async_get_device(
                 identifiers={(DOMAIN, dial_uid)}
@@ -182,7 +155,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                         name=new_name
                     )
                     _LOGGER.info(
-                        "Updated device name for %s to %s", dial_uid, new_name
+                        "Updated device name from server: %s -> %s", dial_uid, new_name
                     )
                 else:
                     # User has customized device name, log but don't override
@@ -193,7 +166,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 
         except Exception as err:
             _LOGGER.error(
-                "Failed to update HA name for %s: %s", dial_uid, err
+                "Failed to update HA device name for %s: %s", dial_uid, err
             )
             
     def mark_name_change_from_ha(self, dial_uid: str) -> None:
@@ -299,6 +272,79 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             updated_config = {**current_config, **server_values}
             await config_manager.async_update_dial_config(dial_uid, updated_config)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
+    
+    async def async_setup_device_tracking(self) -> None:
+        """Set up device registry tracking for bidirectional name sync."""
+        from homeassistant.helpers import device_registry as dr
+        
+        device_registry = dr.async_get(self.hass)
+        
+        # Get all dial devices and set up tracking for each
+        if self.data and "dials" in self.data:
+            for dial_uid in self.data["dials"]:
+                device = device_registry.async_get_device(
+                    identifiers={(DOMAIN, dial_uid)}
+                )
+                if device:
+                    # Track this specific device for name changes
+                    dr.async_track_device_registry_updated_event(
+                        self.hass,
+                        device.id,
+                        self._async_device_registry_updated,
+                    )
+        
+    @callback
+    def _async_device_registry_updated(self, event) -> None:
+        """Handle device registry updates for bidirectional sync."""
+        if not event.data:
+            return
+            
+        changes = event.data.get("changes", {})
+        device_id = event.data.get("device_id")
+        
+        if "name" in changes and device_id:
+            # Schedule async processing
+            self.hass.async_create_task(self._handle_device_name_change(device_id))
+    
+    async def _handle_device_name_change(self, device_id: str) -> None:
+        """Handle device name change from HA to server."""
+        from homeassistant.helpers import device_registry as dr
+        
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get(device_id)
+        
+        if not device or not device.name:
+            return
+            
+        # Find which dial this device belongs to
+        dial_uid = None
+        for identifier in device.identifiers:
+            if identifier[0] == DOMAIN and identifier[1] != self.server_device_id:
+                dial_uid = identifier[1]
+                break
+                
+        if not dial_uid:
+            return
+            
+        # Only sync if not in grace period and name actually changed
+        if not self.is_in_grace_period(dial_uid):
+            previous_name = self._previous_dial_names.get(dial_uid)
+            if device.name != previous_name:
+                _LOGGER.info("Device name changed in HA for %s: %s -> %s", dial_uid, previous_name, device.name)
+                
+                # Mark grace period BEFORE sync
+                self.mark_name_change_from_ha(dial_uid)
+                
+                # Sync to server
+                try:
+                    await self.client.set_dial_name(dial_uid, device.name)
+                    _LOGGER.info("Synced device name to server: %s -> %s", dial_uid, device.name)
+                    # Update our tracking
+                    self._previous_dial_names[dial_uid] = device.name
+                    # Trigger refresh to sync back any server changes
+                    await self.async_request_refresh()
+                except Exception as err:
+                    _LOGGER.error("Failed to sync device name to server for %s: %s", dial_uid, err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -402,6 +448,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if coordinator.data:
         dials_data = coordinator.data.get("dials", {})
         await binding_manager.async_update_bindings(dials_data)
+        
+    # Set up device registry tracking for bidirectional name sync
+    await coordinator.async_setup_device_tracking()
 
     return True
 
