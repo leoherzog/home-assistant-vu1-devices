@@ -6,9 +6,10 @@ from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback, Event
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.device_registry import EVENT_DEVICE_REGISTRY_UPDATED
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -265,13 +266,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         device_registry = dr.async_get(self.hass)
         
         @callback
-        def handle_device_registry_updated(event: str, data: Any) -> None:
+        def handle_device_registry_updated(event: Event) -> None:
             """Handle device registry updates."""
-            if event != dr.EVENT_DEVICE_REGISTRY_UPDATED:
-                return
-                
-            device_id = data.get("device_id")
-            if not device_id:
+            event_data = event.data
+            action = event_data.get("action")
+            device_id = event_data.get("device_id")
+            
+            # Only process update events (not create/delete)
+            if action != "update" or not device_id:
                 return
                 
             # Check if this is one of our devices
@@ -290,7 +292,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 return
                 
             # Check if name changed
-            changes = data.get("changes", {})
+            changes = event_data.get("changes", {})
             if "name_by_user" in changes:
                 new_name = device.name_by_user or device.name
                 if new_name:
@@ -299,8 +301,9 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                         self._sync_device_name_to_server(dial_uid, new_name)
                     )
         
-        # Subscribe to device registry updates
-        self._device_registry_listener = device_registry.async_add_listener(
+        # Subscribe to device registry updates via event bus
+        self._device_registry_listener = self.hass.bus.async_listen(
+            EVENT_DEVICE_REGISTRY_UPDATED,
             handle_device_registry_updated
         )
         _LOGGER.debug("Device registry listener set up for bidirectional name sync")
