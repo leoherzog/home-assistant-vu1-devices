@@ -60,6 +60,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         self._behavior_change_grace_periods: Dict[str, datetime] = {}
         self._grace_period_seconds = 10
         self.server_device_id: Optional[str] = None
+        self._device_registry_listener: Optional[Any] = None
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from VU1 server."""
@@ -259,6 +260,82 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             await config_manager.async_update_dial_config(dial_uid, updated_config)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
     
+    async def async_setup_device_registry_listener(self) -> None:
+        """Set up listener for device registry changes."""
+        device_registry = dr.async_get(self.hass)
+        
+        @callback
+        def handle_device_registry_updated(event: str, data: Any) -> None:
+            """Handle device registry updates."""
+            if event != dr.EVENT_DEVICE_REGISTRY_UPDATED:
+                return
+                
+            device_id = data.get("device_id")
+            if not device_id:
+                return
+                
+            # Check if this is one of our devices
+            device = device_registry.async_get(device_id)
+            if not device:
+                return
+                
+            # Look for our dial UID in the device identifiers
+            dial_uid = None
+            for domain, identifier in device.identifiers:
+                if domain == DOMAIN and not identifier.startswith("vu1_server_"):
+                    dial_uid = identifier
+                    break
+                    
+            if not dial_uid:
+                return
+                
+            # Check if name changed
+            changes = data.get("changes", {})
+            if "name_by_user" in changes:
+                new_name = device.name_by_user or device.name
+                if new_name:
+                    # Schedule the sync task
+                    self.hass.async_create_task(
+                        self._sync_device_name_to_server(dial_uid, new_name)
+                    )
+        
+        # Subscribe to device registry updates
+        self._device_registry_listener = device_registry.async_add_listener(
+            handle_device_registry_updated
+        )
+        _LOGGER.debug("Device registry listener set up for bidirectional name sync")
+    
+    async def _sync_device_name_to_server(self, dial_uid: str, new_name: str) -> None:
+        """Sync device name from HA to server."""
+        # Check if we're in a grace period (name was just synced from server)
+        if self.is_in_grace_period(dial_uid):
+            _LOGGER.debug("Skipping name sync for %s - in grace period", dial_uid)
+            return
+            
+        try:
+            # Mark grace period to prevent sync loop
+            self.mark_name_change_from_ha(dial_uid)
+            
+            # Push to server
+            await self.client.set_dial_name(dial_uid, new_name)
+            
+            # Update our tracking
+            self._previous_dial_names[dial_uid] = new_name
+            
+            _LOGGER.info("Synced device name '%s' to VU1 server for %s", new_name, dial_uid)
+            
+            # Request refresh to ensure everything is in sync
+            await self.async_request_refresh()
+            
+        except Exception as err:
+            _LOGGER.error("Failed to sync device name to server for %s: %s", dial_uid, err)
+    
+    def cleanup_device_registry_listener(self) -> None:
+        """Clean up device registry listener."""
+        if self._device_registry_listener:
+            self._device_registry_listener()
+            self._device_registry_listener = None
+            _LOGGER.debug("Device registry listener cleaned up")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -340,6 +417,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sw_version="1.0",
     )
 
+    # Set up device registry listener for bidirectional name sync
+    await coordinator.async_setup_device_registry_listener()
+
     # NOW fetch initial data
     await coordinator.async_config_entry_first_refresh()
 
@@ -374,6 +454,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = hass.data[DOMAIN].pop(entry.entry_id)
         await data["client"].close()
         
+        # Clean up device registry listener
+        coordinator = data["coordinator"]
+        coordinator.cleanup_device_registry_listener()
+        
         # Shutdown binding manager for this entry
         binding_manager = data.get("binding_manager")
         if binding_manager:
@@ -381,7 +465,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Remove server device from registry
         device_registry = dr.async_get(hass)
-        coordinator = data["coordinator"]
         server_device_id = (DOMAIN, coordinator.server_device_id)
         device = device_registry.async_get_device(identifiers={server_device_id})
         if device:
