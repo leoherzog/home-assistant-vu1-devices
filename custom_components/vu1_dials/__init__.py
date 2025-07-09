@@ -6,11 +6,11 @@ from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback, Event
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.device_registry import async_track_device_registry_updated
+from homeassistant.helpers.device_registry import EVENT_DEVICE_REGISTRY_UPDATED, EventDeviceRegistryUpdatedData
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 
@@ -347,8 +347,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Set up device registry listener for bidirectional name sync
     @callback
-    def handle_device_registry_updated(device_id: str, changes: dict) -> None:
+    def handle_device_registry_updated(event: Event[EventDeviceRegistryUpdatedData]) -> None:
         """Handle device registry updates."""
+        device_id = event.data["device_id"]
+        changes = event.data["changes"]
+        
         if "name_by_user" not in changes:
             return
             
@@ -372,7 +375,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Register the device registry listener and bind its lifecycle to config entry
     entry.async_on_unload(
-        async_track_device_registry_updated(hass, handle_device_registry_updated)
+        hass.bus.async_listen(EVENT_DEVICE_REGISTRY_UPDATED, handle_device_registry_updated)
     )
     
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
