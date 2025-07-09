@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.device_registry import async_track_device_registry_updated
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 
@@ -161,6 +162,26 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             # Clear grace period on failure to allow future updates
             self._name_change_grace_periods.pop(dial_uid, None)
             raise
+
+    async def _handle_device_name_change(self, dial_uid: str, new_name: str) -> None:
+        """Handle device name change from HA UI."""
+        # Check if we're in a grace period (change originated from server)
+        grace_end = self._name_change_grace_periods.get(dial_uid)
+        if grace_end and datetime.now() < grace_end:
+            _LOGGER.debug("Ignoring HA name change for %s during grace period", dial_uid)
+            return
+            
+        # Check if name actually changed
+        if self._previous_dial_names.get(dial_uid) == new_name:
+            return
+            
+        _LOGGER.info("Device name changed in HA for dial %s: '%s'", dial_uid, new_name)
+        
+        # Sync to server using existing method
+        try:
+            await self.async_set_dial_name(dial_uid, new_name)
+        except Exception as err:
+            _LOGGER.error("Failed to sync device name to server: %s", err)
 
     def mark_behavior_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a behavior change originated from HA to prevent sync loops."""
@@ -323,6 +344,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "binding_manager": binding_manager,
     }
+    
+    # Set up device registry listener for bidirectional name sync
+    @callback
+    def handle_device_registry_updated(device_id: str, changes: dict) -> None:
+        """Handle device registry updates."""
+        if "name_by_user" not in changes:
+            return
+            
+        # Check if this is a VU1 dial device
+        device_registry = dr.async_get(hass)
+        device = device_registry.async_get(device_id)
+        
+        if not device:
+            return
+            
+        # Check if it's one of our dial devices
+        for identifier_domain, identifier_value in device.identifiers:
+            if identifier_domain == DOMAIN and not identifier_value.startswith("vu1_server_"):
+                # This is a dial device
+                dial_uid = identifier_value
+                new_name = device.name_by_user or device.name
+                hass.async_create_task(
+                    coordinator._handle_device_name_change(dial_uid, new_name)
+                )
+                break
+    
+    # Register the device registry listener and bind its lifecycle to config entry
+    entry.async_on_unload(
+        async_track_device_registry_updated(hass, handle_device_registry_updated)
+    )
     
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_setup_services(hass, client)
