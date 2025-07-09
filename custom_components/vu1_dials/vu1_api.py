@@ -65,16 +65,16 @@ class VU1APIClient:
         if self._session and self._close_session:
             await self._session.close()
 
-    async def _request(
-        self,
-        method: str,
-        endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Make an API request."""
-        url = f"{self.base_url}/{endpoint}"
+    def _prepare_auth_headers_and_params(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> tuple[Dict[str, str], Dict[str, Any]]:
+        """Prepare authentication headers and parameters for API requests.
         
-        # Prepare headers and parameters
+        Args:
+            endpoint: The API endpoint path
+            params: Optional parameters dict to add auth to
+            
+        Returns:
+            Tuple of (headers_dict, params_dict)
+        """
         headers = {}
         if params is None:
             params = {}
@@ -90,6 +90,20 @@ class VU1APIClient:
         if self.api_key:
             params["key"] = self.api_key
             _LOGGER.debug("Using API key authentication")
+            
+        return headers, params
+
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Make an API request."""
+        url = f"{self.base_url}/{endpoint}"
+        
+        # Use centralized authentication logic
+        headers, params = self._prepare_auth_headers_and_params(endpoint, params)
 
         try:
             endpoint_name = endpoint.split('/')[-1] if '/' in endpoint else endpoint
@@ -255,17 +269,11 @@ class VU1APIClient:
         data = aiohttp.FormData()
         data.add_field('imgfile', image_data, filename='background.png', content_type='image/png')
         
-        url = f"{self.base_url}/api/v0/dial/{dial_uid}/image/set"
-        headers = {}
-        params = {}
+        endpoint = f"api/v0/dial/{dial_uid}/image/set"
+        url = f"{self.base_url}/{endpoint}"
         
-        # Add authentication
-        if self.api_key:
-            params["key"] = self.api_key
-        
-        if self._use_ingress and self.supervisor_token:
-            headers["Authorization"] = f"Bearer {self.supervisor_token}"
-            headers["X-Ingress-Path"] = f"/api/v0/dial/{dial_uid}/image/set"
+        # Use centralized authentication logic
+        headers, params = self._prepare_auth_headers_and_params(endpoint)
         
         try:
             _LOGGER.debug("Uploading image for dial %s (%d bytes)", dial_uid, len(image_data))
