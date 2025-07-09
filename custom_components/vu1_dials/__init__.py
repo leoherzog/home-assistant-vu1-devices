@@ -6,10 +6,9 @@ from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback, Event
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.device_registry import EVENT_DEVICE_REGISTRY_UPDATED
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -56,12 +55,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=update_interval,
         )
         self.client = client
+        # This dictionary tracks the last known name from the server
         self._previous_dial_names: Dict[str, str] = {}
+        # This prevents sync loops when a name change originates from HA
         self._name_change_grace_periods: Dict[str, datetime] = {}
         self._behavior_change_grace_periods: Dict[str, datetime] = {}
         self._grace_period_seconds = 10
         self.server_device_id: Optional[str] = None
-        self._device_registry_listener: Optional[Any] = None
+        # The separate device registry listener is no longer needed
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from VU1 server."""
@@ -84,10 +85,8 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                     status = await self.client.get_dial_status(dial_uid)
                     dial_data[dial_uid] = {**dial, "detailed_status": status}
                     
-                    # Check for server-side name changes
-                    server_name = dial.get("dial_name")
-                    if server_name is not None:
-                        await self._check_server_name_change(dial_uid, server_name)
+                    # This method now handles syncing names FROM the server TO Home Assistant
+                    await self._sync_name_from_server(dial_uid, dial.get("dial_name"))
                     
                     # Check for server-side behavior preset changes
                     await self._check_server_behavior_change(dial_uid, status)
@@ -115,77 +114,61 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         """Set the binding manager reference."""
         self._binding_manager = binding_manager
     
-    async def _check_server_name_change(self, dial_uid: str, server_name: str) -> None:
-        """Check if the server name has changed and sync to HA if needed."""
+    async def _sync_name_from_server(self, dial_uid: str, server_name: Optional[str]) -> None:
+        """Sync device name from server to Home Assistant if it has changed."""
         if not server_name:
             return
-            
-        previous_name = self._previous_dial_names.get(dial_uid)
-        current_time = datetime.now()
-        
-        # Check if we're in a grace period (recently changed name from HA side)
+
+        # Check if we are in a grace period (meaning the change came from HA)
         grace_end = self._name_change_grace_periods.get(dial_uid)
-        if grace_end and current_time < grace_end:
-            _LOGGER.debug(
-                "Ignoring server name change for %s during grace period", dial_uid
-            )
+        if grace_end and datetime.now() < grace_end:
+            _LOGGER.debug("Ignoring server name change for %s during grace period", dial_uid)
             return
-            
-        # If name changed on server, update HA
-        if previous_name and previous_name != server_name:
-            _LOGGER.info(
-                "Server name changed for %s: %s -> %s", 
-                dial_uid, previous_name, server_name
-            )
-            await self._update_ha_device_name(dial_uid, server_name)
-            
-        # Store current name for next comparison
+
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device(identifiers={(DOMAIN, dial_uid)})
+
+        if device and not device.name_by_user and device.name != server_name:
+            _LOGGER.info("Server name for %s changed ('%s' -> '%s'). Updating device.", dial_uid, device.name, server_name)
+            device_registry.async_update_device(device.id, name=server_name)
+
+        # Always update the last known name for the next check
         self._previous_dial_names[dial_uid] = server_name
-        
-    async def _update_ha_device_name(self, dial_uid: str, new_name: str) -> None:
-        """Update device name in Home Assistant from server changes."""
-        try:
-            device_registry = dr.async_get(self.hass)
-            device = device_registry.async_get_device(
-                identifiers={(DOMAIN, dial_uid)}
-            )
-            
-            if device:
-                if not device.name_by_user:
-                    device_registry.async_update_device(
-                        device.id,
-                        name=new_name
-                    )
-                    _LOGGER.info(
-                        "Updated device name from server: %s -> %s", dial_uid, new_name
-                    )
-                else:
-                    # User has customized device name, log but don't override
-                    _LOGGER.debug(
-                        "Skipping device name update for %s - user has custom name: %s", 
-                        dial_uid, device.name_by_user
-                    )
-                
-        except Exception as err:
-            _LOGGER.error(
-                "Failed to update HA device name for %s: %s", dial_uid, err
-            )
             
     def mark_name_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a name change originated from HA to prevent sync loops."""
         grace_end = datetime.now() + timedelta(seconds=self._grace_period_seconds)
         self._name_change_grace_periods[dial_uid] = grace_end
-        _LOGGER.debug(
-            "Started grace period for %s until %s", 
-            dial_uid, grace_end.isoformat()
-        )
+        _LOGGER.debug("Started name change grace period for %s until %s", dial_uid, grace_end.isoformat())
 
-    def is_in_grace_period(self, dial_uid: str) -> bool:
-        """Check if dial is currently in a grace period for name changes."""
-        grace_end = self._name_change_grace_periods.get(dial_uid)
-        if not grace_end:
-            return False
-        return datetime.now() < grace_end
+    async def async_set_dial_name(self, dial_uid: str, new_name: str) -> None:
+        """Set the dial name on the server and update HA. Centralized method."""
+        # Mark that the change is coming from HA to prevent an immediate sync-back
+        self.mark_name_change_from_ha(dial_uid)
+        
+        try:
+            # 1. Push the new name to the VU1 Server
+            await self.client.set_dial_name(dial_uid, new_name)
+            
+            # 2. Update our internal tracker immediately
+            self._previous_dial_names[dial_uid] = new_name
+            
+            # 3. Update the Home Assistant device registry
+            device_registry = dr.async_get(self.hass)
+            device = device_registry.async_get_device(identifiers={(DOMAIN, dial_uid)})
+            if device:
+                device_registry.async_update_device(device.id, name=new_name)
+            
+            _LOGGER.info("Successfully synced name '%s' to server for dial %s", new_name, dial_uid)
+            
+            # 4. Request a refresh to ensure all states are consistent
+            await self.async_request_refresh()
+
+        except VU1APIError as err:
+            _LOGGER.error("Failed to set dial name for %s on server: %s", dial_uid, err)
+            # Clear the grace period on failure to allow future updates
+            self._name_change_grace_periods.pop(dial_uid, None)
+            raise
 
     def mark_behavior_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a behavior change originated from HA to prevent sync loops."""
@@ -261,84 +244,12 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             await config_manager.async_update_dial_config(dial_uid, updated_config)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
     
-    async def async_setup_device_registry_listener(self) -> None:
-        """Set up listener for device registry changes."""
-        device_registry = dr.async_get(self.hass)
-        
-        @callback
-        def handle_device_registry_updated(event: Event) -> None:
-            """Handle device registry updates."""
-            event_data = event.data
-            action = event_data.get("action")
-            device_id = event_data.get("device_id")
-            
-            # Only process update events (not create/delete)
-            if action != "update" or not device_id:
-                return
-                
-            # Check if this is one of our devices
-            device = device_registry.async_get(device_id)
-            if not device:
-                return
-                
-            # Look for our dial UID in the device identifiers
-            dial_uid = None
-            for domain, identifier in device.identifiers:
-                if domain == DOMAIN and not identifier.startswith("vu1_server_"):
-                    dial_uid = identifier
-                    break
-                    
-            if not dial_uid:
-                return
-                
-            # Check if name changed
-            changes = event_data.get("changes", {})
-            if "name_by_user" in changes:
-                new_name = device.name_by_user or device.name
-                if new_name:
-                    # Schedule the sync task
-                    self.hass.async_create_task(
-                        self._sync_device_name_to_server(dial_uid, new_name)
-                    )
-        
-        # Subscribe to device registry updates via event bus
-        self._device_registry_listener = self.hass.bus.async_listen(
-            EVENT_DEVICE_REGISTRY_UPDATED,
-            handle_device_registry_updated
-        )
-        _LOGGER.debug("Device registry listener set up for bidirectional name sync")
-    
-    async def _sync_device_name_to_server(self, dial_uid: str, new_name: str) -> None:
-        """Sync device name from HA to server."""
-        # Check if we're in a grace period (name was just synced from server)
-        if self.is_in_grace_period(dial_uid):
-            _LOGGER.debug("Skipping name sync for %s - in grace period", dial_uid)
-            return
-            
-        try:
-            # Mark grace period to prevent sync loop
-            self.mark_name_change_from_ha(dial_uid)
-            
-            # Push to server
-            await self.client.set_dial_name(dial_uid, new_name)
-            
-            # Update our tracking
-            self._previous_dial_names[dial_uid] = new_name
-            
-            _LOGGER.info("Synced device name '%s' to VU1 server for %s", new_name, dial_uid)
-            
-            # Request refresh to ensure everything is in sync
-            await self.async_request_refresh()
-            
-        except Exception as err:
-            _LOGGER.error("Failed to sync device name to server for %s: %s", dial_uid, err)
-    
-    def cleanup_device_registry_listener(self) -> None:
-        """Clean up device registry listener."""
-        if self._device_registry_listener:
-            self._device_registry_listener()
-            self._device_registry_listener = None
-            _LOGGER.debug("Device registry listener cleaned up")
+    # REMOVED: Device registry listener methods are no longer needed
+    # - async_setup_device_registry_listener
+    # - _sync_device_name_to_server
+    # - cleanup_device_registry_listener
+    # - is_in_grace_period
+    # All name syncing is now handled through the coordinator's update cycle
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -429,9 +340,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sw_version="1.0",
     )
 
-    # Set up device registry listener for bidirectional name sync
-    await coordinator.async_setup_device_registry_listener()
-
+    # The device registry listener is no longer needed
+    # All name syncing is handled through the coordinator's update cycle
+    
     # NOW fetch initial data
     await coordinator.async_config_entry_first_refresh()
 
@@ -464,14 +375,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
-        await data["client"].close()
+        client = data["client"]
+        coordinator = data["coordinator"]  # Get coordinator from the popped data
+        binding_manager = data.get("binding_manager")
         
-        # Clean up device registry listener
-        coordinator = data["coordinator"]
-        coordinator.cleanup_device_registry_listener()
+        await client.close()
+        
+        # The listener cleanup is no longer needed
+        # coordinator.cleanup_device_registry_listener()
         
         # Shutdown binding manager for this entry
-        binding_manager = data.get("binding_manager")
         if binding_manager:
             await binding_manager.async_shutdown()
         
@@ -556,21 +469,17 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         dial_uid = call.data[ATTR_DIAL_UID]
         name = call.data[ATTR_NAME]
         
-        # Get client/coordinator but don't mark grace period yet
+        # Find the coordinator responsible for this dial
         result = _get_dial_client_and_coordinator(hass, dial_uid)
         if not result:
-            _LOGGER.error("Dial %s not found", dial_uid)
+            _LOGGER.error("Dial %s not found for service call", dial_uid)
             raise ValueError(f"Dial {dial_uid} not found")
-            
-        client, coordinator = result
         
-        # Mark grace period BEFORE attempting operation
-        coordinator.mark_name_change_from_ha(dial_uid)
+        _client, coordinator = result
         
         try:
-            await client.set_dial_name(dial_uid, name)
-            await coordinator.async_request_refresh()
-            _LOGGER.info("Service call: synced dial name '%s' to VU1 server for %s", name, dial_uid)
+            # Use the new centralized method in the coordinator
+            await coordinator.async_set_dial_name(dial_uid, name)
         except Exception as err:
             _LOGGER.error("Service call failed to set dial name for %s: %s", dial_uid, err)
             raise
