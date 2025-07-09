@@ -143,76 +143,39 @@ class VU1APIClient:
             raise VU1APIError(f"Connection error: {err}") from err
 
     async def test_connection(self) -> Dict[str, Any]:
-        """Test connection to VU1 server and validate API key.
-        
-        Returns:
-            Dict containing:
-            - connected: bool - Whether server is reachable
-            - authenticated: bool - Whether API key is valid
-            - dials: List[Dict] - Available dials (if authenticated)
-            - error: str - Error message (if any)
-        """
+        """Test connection and API key, returning detailed status."""
+        _LOGGER.debug("Testing connection to VU1 server at %s", self.base_url)
         try:
-            _LOGGER.debug("Testing connection to: %s", self.base_url)
-            
-            # Test with API key if available
-            if self.api_key:
-                try:
-                    response = await self._request("GET", "api/v0/dial/list")
-                    _LOGGER.debug("Connection and API key validation successful")
-                    return {
-                        "connected": True,
-                        "authenticated": True,
-                        "dials": response.get("data", []),
-                        "error": None
-                    }
-                except VU1APIError as err:
-                    # API key validation failed, but server is reachable
-                    _LOGGER.debug("Server reachable but API key invalid: %s", err)
-                    return {
-                        "connected": True,
-                        "authenticated": False,
-                        "dials": [],
-                        "error": str(err)
-                    }
-            else:
-                # No API key provided, just test connectivity
-                url = f"{self.base_url}/api/v0/dial/list"
-                async with self.session.get(url) as response:
-                    # Server is reachable if we get any HTTP response
-                    if response.status in [200, 401, 403]:
-                        _LOGGER.debug("Server is reachable (HTTP %s)", response.status)
-                        return {
-                            "connected": True,
-                            "authenticated": False,
-                            "dials": [],
-                            "error": "No API key provided" if response.status in [401, 403] else None
-                        }
-                    else:
-                        _LOGGER.debug("Server returned unexpected status: %s", response.status)
-                        return {
-                            "connected": False,
-                            "authenticated": False,
-                            "dials": [],
-                            "error": f"Server returned HTTP {response.status}"
-                        }
-                        
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            _LOGGER.debug("Connection test failed: %s", err)
+            # The dial list endpoint requires a valid key, so it tests both
+            # connectivity and authentication simultaneously.
+            response = await self._request("GET", "api/v0/dial/list")
+            _LOGGER.debug("Connection and authentication successful.")
+            return {
+                "connected": True,
+                "authenticated": True,
+                "dials": response.get("data", []),
+                "error": None,
+            }
+        except VU1APIError as err:
+            # This handles API-level errors, like an invalid key (401/403)
+            _LOGGER.error("API key validation failed during connection test: %s", err)
+            return {
+                "connected": True,  # We connected, but the API key is bad
+                "authenticated": False,
+                "dials": [],
+                "error": str(err),
+            }
+        except (ClientError, asyncio.TimeoutError) as err:
+            # This handles lower-level network errors (e.g., server is down)
+            _LOGGER.error("Connection to VU1 server failed: %s", err)
             return {
                 "connected": False,
                 "authenticated": False,
                 "dials": [],
-                "error": f"Connection failed: {err}"
+                "error": f"Connection error: {err}",
             }
-        except Exception as err:
-            _LOGGER.error("Unexpected error during connection test: %s", err)
-            return {
-                "connected": False,
-                "authenticated": False,
-                "dials": [],
-                "error": f"Unexpected error: {err}"
-            }
+
+    # The old test_api_key method is no longer needed and has been removed
 
     async def get_dial_list(self) -> List[Dict[str, Any]]:
         """Get list of available dials."""
