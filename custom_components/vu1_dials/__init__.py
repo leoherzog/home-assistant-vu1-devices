@@ -373,8 +373,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Test connection
     try:
-        if not await client.test_connection():
-            raise ConfigEntryNotReady("Cannot connect to VU1 server")
+        connection_result = await client.test_connection()
+        if not connection_result["connected"]:
+            error_msg = connection_result["error"] or "Unknown connection error"
+            raise ConfigEntryNotReady(f"Cannot connect to VU1 server: {error_msg}")
+        
+        # Log authentication status for debugging
+        if connection_result["authenticated"]:
+            _LOGGER.debug("VU1 server connection successful with valid API key")
+        else:
+            _LOGGER.warning("VU1 server reachable but API key validation failed: %s", 
+                          connection_result["error"])
     except VU1APIError as err:
         raise ConfigEntryNotReady(f"Failed to connect to VU1 server: {err}") from err
 

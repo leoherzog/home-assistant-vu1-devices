@@ -128,41 +128,77 @@ class VU1APIClient:
         except (ClientError, asyncio.TimeoutError) as err:
             raise VU1APIError(f"Connection error: {err}") from err
 
-    async def test_connection(self) -> bool:
-        """Test connection to VU1 server."""
+    async def test_connection(self) -> Dict[str, Any]:
+        """Test connection to VU1 server and validate API key.
+        
+        Returns:
+            Dict containing:
+            - connected: bool - Whether server is reachable
+            - authenticated: bool - Whether API key is valid
+            - dials: List[Dict] - Available dials (if authenticated)
+            - error: str - Error message (if any)
+        """
         try:
             _LOGGER.debug("Testing connection to: %s", self.base_url)
             
-            # Make a direct HTTP request to test connectivity
-            url = f"{self.base_url}/api/v0/dial/list"
-            params = {"key": self.api_key} if self.api_key else {}
-            
-            async with self.session.get(url, params=params) as response:
-                # Server is reachable if we get any HTTP response
-                if response.status in [200, 401, 403]:
-                    _LOGGER.debug("Server is reachable (HTTP %s)", response.status)
-                    return True
-                else:
-                    _LOGGER.debug("Server returned unexpected status: %s", response.status)
-                    return False
-                    
+            # Test with API key if available
+            if self.api_key:
+                try:
+                    response = await self._request("GET", "api/v0/dial/list")
+                    _LOGGER.debug("Connection and API key validation successful")
+                    return {
+                        "connected": True,
+                        "authenticated": True,
+                        "dials": response.get("data", []),
+                        "error": None
+                    }
+                except VU1APIError as err:
+                    # API key validation failed, but server is reachable
+                    _LOGGER.debug("Server reachable but API key invalid: %s", err)
+                    return {
+                        "connected": True,
+                        "authenticated": False,
+                        "dials": [],
+                        "error": str(err)
+                    }
+            else:
+                # No API key provided, just test connectivity
+                url = f"{self.base_url}/api/v0/dial/list"
+                async with self.session.get(url) as response:
+                    # Server is reachable if we get any HTTP response
+                    if response.status in [200, 401, 403]:
+                        _LOGGER.debug("Server is reachable (HTTP %s)", response.status)
+                        return {
+                            "connected": True,
+                            "authenticated": False,
+                            "dials": [],
+                            "error": "No API key provided" if response.status in [401, 403] else None
+                        }
+                    else:
+                        _LOGGER.debug("Server returned unexpected status: %s", response.status)
+                        return {
+                            "connected": False,
+                            "authenticated": False,
+                            "dials": [],
+                            "error": f"Server returned HTTP {response.status}"
+                        }
+                        
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.debug("Connection test failed: %s", err)
-            return False
-
-    async def test_api_key(self) -> Dict[str, Any]:
-        """Test API key validity with detailed error information."""
-        try:
-            _LOGGER.debug("Testing API key validation")
-            response = await self._request("GET", "api/v0/dial/list")
-            _LOGGER.debug("API key validation successful")
-            return {"valid": True, "dials": response.get("data", [])}
-        except VU1APIError as err:
-            _LOGGER.error("API key validation failed: %s", err)
-            return {"valid": False, "error": str(err)}
+            return {
+                "connected": False,
+                "authenticated": False,
+                "dials": [],
+                "error": f"Connection failed: {err}"
+            }
         except Exception as err:
-            _LOGGER.error("Unexpected error during API key validation: %s", err)
-            return {"valid": False, "error": f"Unexpected error: {err}"}
+            _LOGGER.error("Unexpected error during connection test: %s", err)
+            return {
+                "connected": False,
+                "authenticated": False,
+                "dials": [],
+                "error": f"Unexpected error: {err}"
+            }
 
     async def get_dial_list(self) -> List[Dict[str, Any]]:
         """Get list of available dials."""
@@ -407,14 +443,16 @@ async def discover_vu1_server(host: str = "localhost", port: int = DEFAULT_PORT)
                     # Test connection using the client's methods
                     _LOGGER.debug("Testing ingress connection to %s:%s", 
                                addon_ip, addon_result.get("ingress_port", DEFAULT_PORT))
-                    if await client.test_connection():
+                    connection_result = await client.test_connection()
+                    if connection_result["connected"]:
                         _LOGGER.info("VU1 Server discovered via ingress")
                         # Update the result to use IP instead of hostname
                         addon_result["host"] = addon_ip
                         addon_result["port"] = addon_result.get("ingress_port", DEFAULT_PORT)
                         return addon_result
                     else:
-                        _LOGGER.warning("VU1 Server add-on found but connection test failed")
+                        _LOGGER.warning("VU1 Server add-on found but connection test failed: %s", 
+                                      connection_result["error"])
                 except Exception as err:
                     _LOGGER.warning("Ingress add-on discovered but not reachable: %s", err)
                 finally:

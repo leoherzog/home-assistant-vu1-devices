@@ -470,13 +470,17 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
     try:
         _LOGGER.debug("Testing connection to VU1 server at %s", connection_info)
         
-        # Use enhanced API key testing for better error information
-        api_test_result = await client.test_api_key()
-        if not api_test_result["valid"]:
-            _LOGGER.error("API key validation failed: %s", api_test_result.get("error", "Unknown error"))
-            raise InvalidAuth(f"Invalid API Key: {api_test_result.get('error', 'Unknown error')}")
+        # Use enhanced connection testing for better error information
+        connection_result = await client.test_connection()
+        if not connection_result["connected"]:
+            _LOGGER.error("Connection failed: %s", connection_result.get("error", "Unknown error"))
+            raise CannotConnect(f"Cannot connect to VU1 server: {connection_result.get('error', 'Unknown error')}")
         
-        dials = api_test_result.get("dials", [])
+        if not connection_result["authenticated"]:
+            _LOGGER.error("API key validation failed: %s", connection_result.get("error", "Unknown error"))
+            raise InvalidAuth(f"Invalid API Key: {connection_result.get('error', 'Unknown error')}")
+        
+        dials = connection_result.get("dials", [])
         _LOGGER.debug("Successfully connected to VU1 server, found %d dials", len(dials))
         
     except InvalidAuth:
