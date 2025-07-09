@@ -64,7 +64,7 @@ class VU1ConfigEntityBase(CoordinatorEntity):
             "name": self._dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
             "manufacturer": "Streacom",
             "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_id),
+            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
         }
 
     async def _update_config(self, **config_updates) -> None:

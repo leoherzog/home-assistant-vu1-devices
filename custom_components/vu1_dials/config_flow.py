@@ -16,7 +16,6 @@ from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 _LOGGER = logging.getLogger(__name__)
 
 
-
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VU1 Dials."""
 
@@ -40,7 +39,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: Dict[str, str] = {}
 
         if user_input is None:
-            # Check if add-on is available
+            # First, check if VU1 Server add-on is available via Supervisor API
             _LOGGER.info("Checking for VU1 Server add-on...")
             discovered = await discover_vu1_addon()
             
@@ -52,7 +51,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._discovered_host = discovered.get("host", discovered.get("addon_ip"))
                 self._discovered_port = discovered.get("port", discovered.get("ingress_port", 5340))
                 
-                # Extract add-on name from slug (e.g., "local_vu-server-addon" -> "vu-server-addon")
+                # Extract user-friendly name from slug for display
                 addon_slug = discovered.get("slug", "")
                 self._addon_name = addon_slug.split("_")[-1] if "_" in addon_slug else addon_slug
                 
@@ -60,7 +59,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 _LOGGER.info("No VU1 Server add-on found")
 
-            # Show connection type selection
+            # Build connection type options (add-on first if available)
             options = [
                 {"value": "manual", "label": "Manual configuration"}
             ]
@@ -83,7 +82,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             )
 
-        # User selected connection type
         if user_input.get("connection_type") == "addon":
             return await self.async_step_addon()
         else:
@@ -96,7 +94,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: Dict[str, str] = {}
 
         if user_input is not None:
-            # Set unique ID to prevent duplicate configs
+            # Set unique ID to prevent duplicate manual configurations
             await self.async_set_unique_id(f"vu1_server_{user_input['host']}_{user_input['port']}")
             self._abort_if_unique_id_configured()
             
@@ -112,7 +110,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return self.async_create_entry(title=info["title"], data=user_input)
 
-        # Show manual configuration form
         schema = vol.Schema({
             vol.Required("host", default="localhost"): cv.string,
             vol.Required("port", default=5340): cv.port,
@@ -135,13 +132,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: Dict[str, str] = {}
 
         if user_input is not None:
-            # Prepare full configuration with discovered add-on details
+            # Build configuration using discovered add-on details
             full_input = {
                 "host": self._discovered_host,
                 "port": self._discovered_port,
                 "api_key": user_input["api_key"],
             }
             
+            # Add ingress configuration if applicable
             if self._discovered_ingress:
                 full_input.update({
                     "ingress": True,
@@ -149,7 +147,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "supervisor_token": self._supervisor_token,
                 })
             
-            # Set unique ID
+            # Set unique ID based on connection type
             if self._discovered_ingress:
                 await self.async_set_unique_id(f"vu1_server_ingress_{self._discovered_slug}")
             else:
@@ -158,7 +156,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             
             try:
                 info = await validate_input(self.hass, full_input)
-                # Override title to use Add-on format
+                # Override title to show it's an add-on
                 info["title"] = f"Add-on ({self._addon_name or 'Unknown'})"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -170,7 +168,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return self.async_create_entry(title=info["title"], data=full_input)
 
-        # Show add-on configuration form (only API key needed)
         schema = vol.Schema({
             vol.Required("api_key"): cv.string,
         })
@@ -208,7 +205,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         """Manage the options."""
         errors: Dict[str, str] = {}
         
-        # Get available dials
         try:
             coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
             if coordinator.data:
@@ -229,10 +225,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 self._selected_dial = user_input["configure_dial"]
                 return await self.async_step_configure_dial()
             
-            # Just update interval
             return self.async_create_entry(title="", data=user_input)
 
-        # Schema with dial selection and update interval
         schema_dict = {
             vol.Optional(
                 "update_interval",
@@ -240,7 +234,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
         }
         
-        # Add dial configuration option if dials are available
         if self._dials:
             schema_dict[vol.Optional("configure_dial")] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=self._dials)
@@ -264,7 +257,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if not self._selected_dial:
             return await self.async_step_init()
 
-        # Get current configuration
         try:
             from .device_config import async_get_config_manager
             config_manager = async_get_config_manager(self.hass)
@@ -275,19 +267,16 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return await self.async_step_init()
 
         if user_input is not None:
-            # User selected update mode - redirect to appropriate step
             if user_input["update_mode"] == "automatic":
                 return await self.async_step_configure_automatic()
             else:
                 return await self.async_step_configure_manual()
 
-        # Get dial info for display
         coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
         dials_data = coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._selected_dial, {})
         dial_name = dial_data.get("dial_name", self._selected_dial)
 
-        # Schema with update mode selection
         schema = vol.Schema({
             vol.Required(
                 "update_mode", 
@@ -321,7 +310,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if not self._selected_dial:
             return await self.async_step_init()
         
-        # Get current configuration
         try:
             from .device_config import async_get_config_manager
             config_manager = async_get_config_manager(self.hass)
@@ -332,14 +320,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return await self.async_step_configure_dial()
 
         if user_input is not None:
-            # Validate min < max
             value_min = user_input.get("value_min", 0)
             value_max = user_input.get("value_max", 100)
             if value_min >= value_max:
                 errors["base"] = "value_min_greater_than_max"
             else:
                 try:
-                    # Merge with mode from previous step
                     processed_config = {
                         "update_mode": "automatic",
                         "bound_entity": user_input.get("bound_entity") or None,
@@ -349,7 +335,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     
                     await config_manager.async_update_dial_config(self._selected_dial, processed_config)
                     
-                    # Update sensor bindings
                     from .sensor_binding import async_get_binding_manager
                     binding_manager = async_get_binding_manager(self.hass)
                     if binding_manager:
@@ -361,19 +346,16 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     _LOGGER.error("Failed to update dial configuration: %s", err)
                     errors["base"] = "config_update_failed"
 
-        # Get dial info for display
         coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
         dials_data = coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._selected_dial, {})
         dial_name = dial_data.get("dial_name", self._selected_dial)
 
-        # Entity selector configuration
         entity_selector_config = selector.EntitySelectorConfig(
             domain=["sensor", "input_number", "number", "counter"],
             multiple=False,
         )
 
-        # Automatic mode schema with sensor binding
         schema = vol.Schema({
             vol.Required(
                 "bound_entity", 
@@ -410,7 +392,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             from .device_config import async_get_config_manager
             config_manager = async_get_config_manager(self.hass)
             
-            # Save manual mode configuration
             processed_config = {
                 "update_mode": "manual",
                 "bound_entity": None,
@@ -420,7 +401,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             
             await config_manager.async_update_dial_config(self._selected_dial, processed_config)
             
-            # Update sensor bindings (clears any existing binding)
             from .sensor_binding import async_get_binding_manager
             binding_manager = async_get_binding_manager(self.hass)
             if binding_manager:
@@ -431,8 +411,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         except Exception as err:
             _LOGGER.error("Failed to update dial configuration: %s", err)
             return self.async_abort(reason="config_update_failed")
-
-
 
 
 class CannotConnect(HomeAssistantError):
@@ -449,9 +427,8 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     """
     if data.get("ingress"):
-        # Ingress connection via internal hostname
         client = VU1APIClient(
-            host=data["host"],  # local-{slug}
+            host=data["host"],
             port=data["port"],
             ingress_slug=data["ingress_slug"],
             supervisor_token=data["supervisor_token"],
@@ -459,7 +436,6 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
         )
         connection_info = f"ingress ({data['ingress_slug']})"
     else:
-        # Direct connection
         client = VU1APIClient(
             host=data["host"],
             port=data["port"],
@@ -470,7 +446,6 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
     try:
         _LOGGER.debug("Testing connection to VU1 server at %s", connection_info)
         
-        # Use enhanced connection testing for better error information
         connection_result = await client.test_connection()
         if not connection_result["connected"]:
             _LOGGER.error("Connection failed: %s", connection_result.get("error", "Unknown error"))
@@ -484,7 +459,7 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
         _LOGGER.debug("Successfully connected to VU1 server, found %d dials", len(dials))
         
     except InvalidAuth:
-        raise  # Re-raise InvalidAuth exceptions
+        raise
     except VU1APIError as err:
         _LOGGER.error("VU1 API error during validation: %s", err)
         if "auth" in str(err).lower() or "key" in str(err).lower() or "forbidden" in str(err).lower():
@@ -493,7 +468,6 @@ async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str,
     finally:
         await client.close()
 
-    # Return info that you want to store in the config entry.
     return {
         "title": f"VU1 Server ({connection_info})",
         "dial_count": len(dials),

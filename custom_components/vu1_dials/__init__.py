@@ -55,14 +55,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=update_interval,
         )
         self.client = client
-        # This dictionary tracks the last known name from the server
+        # Track last known names to detect server-side changes
         self._previous_dial_names: Dict[str, str] = {}
-        # This prevents sync loops when a name change originates from HA
+        # Prevent sync loops when name changes originate from HA
         self._name_change_grace_periods: Dict[str, datetime] = {}
         self._behavior_change_grace_periods: Dict[str, datetime] = {}
         self._grace_period_seconds = 10
-        self.server_device_id: Optional[str] = None
-        # The separate device registry listener is no longer needed
+        # Store device identifier string for via_device relationships, not internal device.id
+        self.server_device_identifier: Optional[str] = None
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from VU1 server."""
@@ -85,22 +85,17 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                     status = await self.client.get_dial_status(dial_uid)
                     dial_data[dial_uid] = {**dial, "detailed_status": status}
                     
-                    # This method now handles syncing names FROM the server TO Home Assistant
                     await self._sync_name_from_server(dial_uid, dial.get("dial_name"))
-                    
-                    # Check for server-side behavior preset changes
                     await self._check_server_behavior_change(dial_uid, status)
                     
                 except VU1APIError as err:
                     _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, err)
-                    # Still include the dial with basic info
+                    # Still include the dial with basic info if status fails
                     dial_data[dial_uid] = {**dial, "detailed_status": {}}
 
-            # Update sensor bindings when data changes
             if hasattr(self, '_binding_manager') and self._binding_manager:
                 await self._binding_manager.async_update_bindings({"dials": dial_data})
 
-            # Return data structure with dials
             return {"dials": dial_data}
 
         except VU1APIError as err:
@@ -119,7 +114,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         if not server_name:
             return
 
-        # Check if we are in a grace period (meaning the change came from HA)
+        # Check if we're in a grace period (change originated from HA)
         grace_end = self._name_change_grace_periods.get(dial_uid)
         if grace_end and datetime.now() < grace_end:
             _LOGGER.debug("Ignoring server name change for %s during grace period", dial_uid)
@@ -132,7 +127,6 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Server name for %s changed ('%s' -> '%s'). Updating device.", dial_uid, device.name, server_name)
             device_registry.async_update_device(device.id, name=server_name)
 
-        # Always update the last known name for the next check
         self._previous_dial_names[dial_uid] = server_name
             
     def mark_name_change_from_ha(self, dial_uid: str) -> None:
@@ -143,30 +137,28 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 
     async def async_set_dial_name(self, dial_uid: str, new_name: str) -> None:
         """Set the dial name on the server and update HA. Centralized method."""
-        # Mark that the change is coming from HA to prevent an immediate sync-back
+        # Mark that this change originated from HA to prevent sync loops
         self.mark_name_change_from_ha(dial_uid)
         
         try:
-            # 1. Push the new name to the VU1 Server
+            # 1. Update the VU1 Server
             await self.client.set_dial_name(dial_uid, new_name)
-            
-            # 2. Update our internal tracker immediately
+            # 2. Update our internal tracker
             self._previous_dial_names[dial_uid] = new_name
             
-            # 3. Update the Home Assistant device registry
+            # 3. Update the HA device registry
             device_registry = dr.async_get(self.hass)
             device = device_registry.async_get_device(identifiers={(DOMAIN, dial_uid)})
             if device:
                 device_registry.async_update_device(device.id, name=new_name)
             
             _LOGGER.info("Successfully synced name '%s' to server for dial %s", new_name, dial_uid)
-            
-            # 4. Request a refresh to ensure all states are consistent
+            # 4. Refresh coordinator to ensure consistency
             await self.async_request_refresh()
 
         except VU1APIError as err:
             _LOGGER.error("Failed to set dial name for %s on server: %s", dial_uid, err)
-            # Clear the grace period on failure to allow future updates
+            # Clear grace period on failure to allow future updates
             self._name_change_grace_periods.pop(dial_uid, None)
             raise
 
@@ -190,18 +182,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Ignoring server behavior change for %s during grace period", dial_uid)
             return
             
-        # Extract easing settings from server status
         easing_config = status.get("easing", {})
         if not easing_config:
             return
             
-        # Get current HA configuration
         from .device_config import async_get_config_manager
         config_manager = async_get_config_manager(self.hass)
         current_config = config_manager.get_dial_config(dial_uid)
-        
-        # Check if server values differ from HA config
-        # Convert values to int with proper error handling
+        # Convert server values to int with fallbacks for invalid data
         try:
             dial_period = int(easing_config.get("dial_period", 50))
         except (ValueError, TypeError):
@@ -239,30 +227,19 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 )
         
         if config_changed:
-            # Update HA configuration to match server
+            # Update HA config to match server values
             updated_config = {**current_config, **server_values}
             await config_manager.async_update_dial_config(dial_uid, updated_config)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
-    
-    # REMOVED: Device registry listener methods are no longer needed
-    # - async_setup_device_registry_listener
-    # - _sync_device_name_to_server
-    # - cleanup_device_registry_listener
-    # - is_in_grace_period
-    # All name syncing is now handled through the coordinator's update cycle
-
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up VU1 Dials from a config entry."""
     api_key = entry.data[CONF_API_KEY]
-    
-    # Get configurable timeout from options
     timeout = entry.options.get("timeout", DEFAULT_TIMEOUT)
-
-    # Create client based on connection type
+    
+    # Create client based on connection type (ingress vs direct)
     if entry.data.get("ingress"):
-        # Ingress connection via internal hostname
-        host = entry.data[CONF_HOST]  # local-{slug}
+        host = entry.data[CONF_HOST]
         port = entry.data[CONF_PORT]
         client = VU1APIClient(
             host=host,
@@ -275,14 +252,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         connection_info = f"ingress ({entry.data['ingress_slug']})"
         device_identifier = f"vu1_server_ingress_{entry.data['ingress_slug']}"
     else:
-        # Direct connection
         host = entry.data[CONF_HOST]
         port = entry.data[CONF_PORT]
         client = VU1APIClient(host, port, api_key, timeout=timeout)
         connection_info = f"{host}:{port}"
         device_identifier = f"vu1_server_{host}_{port}"
 
-    # Test connection
     try:
         connection_result = await client.test_connection()
         if not connection_result["connected"]:
@@ -298,33 +273,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except VU1APIError as err:
         raise ConfigEntryNotReady(f"Failed to connect to VU1 server: {err}") from err
 
-    # Create coordinator
     update_interval = timedelta(
         seconds=entry.options.get("update_interval", DEFAULT_UPDATE_INTERVAL)
     )
 
     coordinator = VU1DataUpdateCoordinator(hass, client, update_interval)
-    coordinator.server_device_id = device_identifier
+    # Store the device identifier string for proper via_device relationships
+    coordinator.server_device_identifier = device_identifier
 
     # Set up device configuration manager
     from .device_config import async_get_config_manager
     config_manager = async_get_config_manager(hass)
     await config_manager.async_load()
     
-    # Set up sensor binding manager BEFORE first refresh
+    # Set up sensor binding manager before first data refresh
     from .sensor_binding import async_get_binding_manager
     binding_manager = async_get_binding_manager(hass)
     await binding_manager.async_setup()
     
-    # Connect binding manager to coordinator BEFORE first refresh
+    # Connect binding manager to coordinator
     coordinator.set_binding_manager(binding_manager)
     
-    # Register the VU1 server as a device BEFORE setting up platforms
+    # Register the VU1 server as a hub device
     device_registry = dr.async_get(hass)
     
     # Determine device name based on connection type
     if entry.data.get("ingress"):
-        # Extract add-on name from slug
+        # Extract add-on name from slug for display
         addon_slug = entry.data.get("ingress_slug", "")
         addon_name = addon_slug.split("_")[-1] if "_" in addon_slug else addon_slug
         device_name = f"Add-on ({addon_name})"
@@ -340,28 +315,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sw_version="1.0",
     )
 
-    # The device registry listener is no longer needed
-    # All name syncing is handled through the coordinator's update cycle
-    
-    # NOW fetch initial data
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "client": client,
         "coordinator": coordinator,
+        "binding_manager": binding_manager,
     }
     
-    # Add binding manager to data for coordinator access
-    hass.data[DOMAIN][entry.entry_id]["binding_manager"] = binding_manager
-    
-    # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Register services
     await async_setup_services(hass, client)
     
-    # Initial binding update
     if coordinator.data:
         dials_data = coordinator.data.get("dials", {})
         await binding_manager.async_update_bindings(dials_data)
@@ -376,22 +341,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
         client = data["client"]
-        coordinator = data["coordinator"]  # Get coordinator from the popped data
+        coordinator = data["coordinator"]
         binding_manager = data.get("binding_manager")
         
         await client.close()
         
-        # The listener cleanup is no longer needed
-        # coordinator.cleanup_device_registry_listener()
-        
-        # Shutdown binding manager for this entry
         if binding_manager:
             await binding_manager.async_shutdown()
         
-        # Remove server device from registry
+        # Clean up server device from device registry
         device_registry = dr.async_get(hass)
-        server_device_id = (DOMAIN, coordinator.server_device_id)
-        device = device_registry.async_get_device(identifiers={server_device_id})
+        device = device_registry.async_get_device(
+            identifiers={(DOMAIN, coordinator.server_device_identifier)}
+        )
         if device:
             device_registry.async_remove_device(device.id)
         
@@ -416,7 +378,6 @@ async def _execute_dial_service(
     refresh: bool = True
 ) -> None:
     """Execute a dial service with common error handling."""
-    # Validate dial_uid is not empty
     if not dial_uid or not isinstance(dial_uid, str):
         _LOGGER.error("Invalid dial_uid provided: %s", dial_uid)
         raise ValueError(f"Invalid dial_uid: {dial_uid}")
@@ -469,7 +430,6 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         dial_uid = call.data[ATTR_DIAL_UID]
         name = call.data[ATTR_NAME]
         
-        # Find the coordinator responsible for this dial
         result = _get_dial_client_and_coordinator(hass, dial_uid)
         if not result:
             _LOGGER.error("Dial %s not found for service call", dial_uid)
@@ -478,7 +438,6 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         _client, coordinator = result
         
         try:
-            # Use the new centralized method in the coordinator
             await coordinator.async_set_dial_name(dial_uid, name)
         except Exception as err:
             _LOGGER.error("Service call failed to set dial name for %s: %s", dial_uid, err)
@@ -502,7 +461,6 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
             lambda client: client.calibrate_dial(dial_uid)
         )
 
-    # Register services
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_DIAL_VALUE,

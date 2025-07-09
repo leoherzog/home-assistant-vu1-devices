@@ -30,13 +30,15 @@ STORAGE_KEY = f"{DOMAIN}_dial_configs"
 
 
 class VU1DialConfigManager:
-    """Manage VU1 dial configurations."""
+    """Manage VU1 dial configurations with persistent storage."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the config manager."""
         self.hass = hass
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        # In-memory cache of dial configurations: dial_uid -> config_dict
         self._configs: Dict[str, Dict[str, Any]] = {}
+        # Event listeners for config changes: dial_uid -> [listener_functions]
         self._listeners: Dict[str, list] = {}
 
     async def async_load(self) -> None:
@@ -57,20 +59,20 @@ class VU1DialConfigManager:
         self, dial_uid: str, config: Dict[str, Any]
     ) -> None:
         """Update configuration for a dial."""
-        # Get the existing configuration
+        # Get the existing configuration (includes defaults)
         existing_config = self.get_dial_config(dial_uid)
         
-        # Merge with new config
+        # Merge new settings with existing config
         merged_config = {**existing_config, **config}
         
-        # Validate the merged configuration
+        # Validate and sanitize the merged configuration
         validated_config = self._validate_config(merged_config)
         
-        # Store the configuration
+        # Store in memory cache and persist to disk
         self._configs[dial_uid] = validated_config
         await self.async_save()
         
-        # Notify listeners
+        # Notify listeners (entities, binding manager) of changes
         await self._notify_listeners(dial_uid, validated_config)
 
     def _get_default_config(self) -> Dict[str, Any]:
@@ -94,44 +96,44 @@ class VU1DialConfigManager:
         # Create a copy to operate on, preserving the original
         validated = config.copy()
         
-        # Get defaults to fill in any missing keys, without overwriting existing ones
+        # Fill in any missing keys with defaults
         defaults = self._get_default_config()
         for key, default_value in defaults.items():
             if key not in validated:
                 validated[key] = default_value
         
-        # Validate bound_entity
+        # Validate bound entity exists in entity registry
         if validated.get(CONF_BOUND_ENTITY) and not self._is_valid_entity(validated[CONF_BOUND_ENTITY]):
             validated[CONF_BOUND_ENTITY] = None
         
-        # Validate value_min
+        # Validate value_min as float
         try:
             validated[CONF_VALUE_MIN] = float(validated[CONF_VALUE_MIN])
         except (ValueError, TypeError, KeyError):
             validated[CONF_VALUE_MIN] = defaults[CONF_VALUE_MIN]
 
-        # Validate value_max
+        # Validate value_max as float
         try:
             validated[CONF_VALUE_MAX] = float(validated[CONF_VALUE_MAX])
         except (ValueError, TypeError, KeyError):
             validated[CONF_VALUE_MAX] = defaults[CONF_VALUE_MAX]
             
-        # Ensure min <= max
+        # Ensure min <= max (swap if necessary)
         if validated[CONF_VALUE_MIN] > validated[CONF_VALUE_MAX]:
             validated[CONF_VALUE_MIN], validated[CONF_VALUE_MAX] = validated[CONF_VALUE_MAX], validated[CONF_VALUE_MIN]
         
-        # Validate backlight_color (accept both list and tuple for compatibility)
+        # Validate backlight_color as RGB values (0-100 each)
         color = validated.get(CONF_BACKLIGHT_COLOR)
         if isinstance(color, (list, tuple)) and len(color) == 3:
             try:
-                # Always store as list for JSON compatibility
+                # Clamp RGB values to 0-100 range and store as list for JSON compatibility
                 validated[CONF_BACKLIGHT_COLOR] = [max(0, min(100, int(c))) for c in color]
             except (ValueError, TypeError):
                 validated[CONF_BACKLIGHT_COLOR] = list(defaults[CONF_BACKLIGHT_COLOR])
         else:
             validated[CONF_BACKLIGHT_COLOR] = list(defaults[CONF_BACKLIGHT_COLOR])
 
-        # Validate update_mode
+        # Validate update_mode is one of the allowed values
         if validated.get(CONF_UPDATE_MODE) not in [UPDATE_MODE_AUTOMATIC, "manual"]:
             validated[CONF_UPDATE_MODE] = defaults[CONF_UPDATE_MODE]
 

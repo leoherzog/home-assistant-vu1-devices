@@ -65,7 +65,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
             "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
             "manufacturer": "Streacom",
             "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_id),
+            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
         }
 
     @property

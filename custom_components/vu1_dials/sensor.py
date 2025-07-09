@@ -33,19 +33,15 @@ async def async_setup_entry(
 
     entities = []
     
-    # Create sensor entities for each dial
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
-        # Main dial sensor
         entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_info))
         
-        # Configuration status sensors
         entities.extend([
             VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
             VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
         ])
         
-        # Diagnostic sensors (disabled by default)
         entities.extend([
             VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
             VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
@@ -88,8 +84,7 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
             manufacturer=MANUFACTURER,
             model=MODEL,
             sw_version="1.0",
-            # Add via_device to link to the VU1 server hub
-            via_device=(DOMAIN, self.coordinator.server_device_id),
+            via_device=(DOMAIN, self.coordinator.server_device_identifier),
         )
 
 
@@ -117,7 +112,6 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_class(self) -> Optional[SensorDeviceClass]:
         """Return the device class."""
-        # Using generic device class since this is a dial/gauge
         return None
 
     @property
@@ -153,7 +147,7 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         
         attributes["dial_name"] = dial_data.get("dial_name")
 
-        # Add backlight information from detailed status
+        # Add backlight color information from detailed status
         detailed_status = dial_data.get("detailed_status", {})
         backlight = detailed_status.get("backlight", {})
         if backlight:
@@ -163,11 +157,11 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
                 "backlight_blue": backlight.get("blue"),
             })
 
-        # Add image file information
+        # Add image file info if available
         if "image_file" in dial_data:
             attributes["image_file"] = dial_data["image_file"]
 
-        # Add detailed status if available
+        # Include full detailed status for advanced users
         if detailed_status:
             attributes["detailed_status"] = detailed_status
 
@@ -203,7 +197,7 @@ class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
             manufacturer=MANUFACTURER,
             model=MODEL,
             sw_version="1.0",
-            via_device=(DOMAIN, self.coordinator.server_device_id),
+            via_device=(DOMAIN, self.coordinator.server_device_identifier),
         )
 
     @property

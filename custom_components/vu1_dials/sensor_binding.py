@@ -33,10 +33,13 @@ class VU1SensorBindingManager:
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the binding manager."""
         self.hass = hass
-        self._bindings: Dict[str, Dict[str, Any]] = {}  # dial_uid -> binding_info
-        self._listeners: Dict[str, Any] = {}  # entity_id -> listener
+        # Track active bindings: dial_uid -> {entity_id, config, dial_data, client, last_state}
+        self._bindings: Dict[str, Dict[str, Any]] = {}
+        # Track state change listeners: entity_id -> listener function
+        self._listeners: Dict[str, Any] = {}
         self._config_manager = async_get_config_manager(hass)
-        self._debouncers: Dict[str, Debouncer] = {}  # dial_uid -> debouncer
+        # Debounce API calls to prevent rapid updates: dial_uid -> debouncer
+        self._debouncers: Dict[str, Debouncer] = {}
 
     async def async_setup(self) -> None:
         """Set up the binding manager."""
@@ -52,7 +55,7 @@ class VU1SensorBindingManager:
         for dial_uid in old_dials:
             await self._remove_binding(dial_uid)
 
-        # Update bindings for current dials
+        # Update bindings for current dials - checks config and creates/updates as needed
         for dial_uid in existing_dials:
             config = self._config_manager.get_dial_config(dial_uid)
             await self._update_binding(dial_uid, config, dial_data[dial_uid])
@@ -66,25 +69,24 @@ class VU1SensorBindingManager:
 
         existing_binding = self._bindings.get(dial_uid)
 
-        # If mode is not automatic, or no entity is bound, remove any existing binding.
+        # If mode is not automatic, or no entity is bound, remove any existing binding
         if update_mode != UPDATE_MODE_AUTOMATIC or not bound_entity:
             if existing_binding:
                 await self._remove_binding(dial_uid)
             return
 
-        # At this point, mode is automatic and an entity is bound.
+        # At this point, mode is automatic and an entity is bound
         if existing_binding:
-            # A binding already exists. Check if it's for the same entity.
+            # Check if the bound entity has changed - if so, recreate the binding
             if existing_binding.get("entity_id") != bound_entity:
-                # The bound entity has changed. Recreate the binding.
                 await self._remove_binding(dial_uid)
                 await self._create_binding(dial_uid, bound_entity, config, dial_data)
             else:
-                # The binding is for the same entity. Just update the config in memory.
+                # Same entity - just update the config (range settings, colors, etc.)
                 existing_binding["config"] = config.copy()
                 existing_binding["dial_data"] = dial_data.copy()
         else:
-            # No binding exists for this dial. Create one.
+            # No binding exists for this dial - create one
             await self._create_binding(dial_uid, bound_entity, config, dial_data)
 
     async def _create_binding(
@@ -119,16 +121,16 @@ class VU1SensorBindingManager:
             "config": config.copy(),
             "dial_data": dial_data.copy(),
             "client": client,
-            "last_state": None,  # Add a place to store the most recent state
+            "last_state": None,  # Store the most recent state for debounced processing
         }
 
-        # Create debouncer that calls _apply_sensor_value for this specific dial
+        # Create debouncer to limit API calls (5 second cooldown per dial)
         self._debouncers[dial_uid] = Debouncer(
             self.hass,
             _LOGGER,
             cooldown=DEBOUNCE_SECONDS,
             immediate=False,
-            # Use functools.partial here to create a stable reference to the function
+            # Bind the dial_uid to the function using partial
             function=functools.partial(self._apply_sensor_value, dial_uid),
         )
 
@@ -139,10 +141,9 @@ class VU1SensorBindingManager:
 
         _LOGGER.info("Created sensor binding: %s -> dial %s", entity_id, dial_uid)
 
-        # Apply initial state immediately, bypassing the debouncer
+        # Apply initial state immediately (bypass debouncer for first update)
         initial_state = self.hass.states.get(entity_id)
         if initial_state:
-            # We can now pass the state directly since we are not using the debouncer here
             await self._apply_sensor_value_from_state(dial_uid, initial_state)
 
     async def _remove_binding(self, dial_uid: str) -> None:
@@ -178,9 +179,9 @@ class VU1SensorBindingManager:
         # Find dial(s) bound to this entity
         for dial_uid, binding_info in self._bindings.items():
             if binding_info["entity_id"] == entity_id:
-                # 1. Store the latest state
+                # Store the latest state for debounced processing
                 binding_info["last_state"] = new_state
-                # 2. Schedule the call. The debouncer will execute the function we gave it earlier.
+                # Schedule the API call (debouncer will prevent rapid updates)
                 if debouncer := self._debouncers.get(dial_uid):
                     debouncer.async_schedule_call()
 
@@ -193,7 +194,7 @@ class VU1SensorBindingManager:
         await self._apply_sensor_value_from_state(dial_uid, binding_info["last_state"])
 
     async def _apply_sensor_value_from_state(self, dial_uid: str, state: State) -> None:
-        """The core logic for applying a sensor value to a dial."""
+        """Core logic for applying a sensor value to a dial."""
         binding_info = self._bindings.get(dial_uid)
         if not binding_info:
             return
@@ -202,18 +203,18 @@ class VU1SensorBindingManager:
         client = binding_info["client"]
         
         try:
-            # Parse sensor value
+            # Parse numeric value from sensor state
             sensor_value = self._parse_sensor_value(state)
             if sensor_value is None:
                 return
 
-            # Map to dial range
+            # Map sensor range to dial 0-100% range
             dial_value = self._map_value_to_dial(sensor_value, config)
             
-            # Update dial
+            # Update dial position
             await client.set_dial_value(dial_uid, dial_value)
             
-            # Update backlight if configured
+            # Apply saved backlight color if configured
             backlight_color = config.get(CONF_BACKLIGHT_COLOR)
             if backlight_color:
                 await client.set_dial_backlight(
@@ -236,11 +237,11 @@ class VU1SensorBindingManager:
             # Try direct numeric conversion
             return float(state.state)
         except (ValueError, TypeError):
-            # Handle special states
+            # Handle special Home Assistant states
             if state.state in ["unknown", "unavailable", "none"]:
                 return None
             
-            # Try to extract numeric value from string
+            # Extract first numeric value from string (e.g., "23.5°C" -> 23.5)
             import re
             match = re.search(r'[-+]?\d*\.?\d+', str(state.state))
             if match:
@@ -253,28 +254,28 @@ class VU1SensorBindingManager:
         value_min = config.get(CONF_VALUE_MIN, 0)
         value_max = config.get(CONF_VALUE_MAX, 100)
         
-        # Handle edge cases
+        # Handle edge case where min equals max
         if value_min == value_max:
-            return 50  # Middle value if no range
+            return 50  # Middle value if no range defined
         
-        # Map sensor value to 0-100 range
+        # Clamp and map sensor value to 0-100 range
         if sensor_value <= value_min:
             dial_value = 0
         elif sensor_value >= value_max:
             dial_value = 100
         else:
-            # Linear mapping
+            # Linear interpolation between min and max
             dial_value = int(((sensor_value - value_min) / (value_max - value_min)) * 100)
         
         return max(0, min(100, dial_value))
 
     def _get_client_for_dial(self, dial_uid: str) -> Optional[VU1APIClient]:
         """Get VU1 API client for a specific dial."""
-        # Check if domain data exists yet
+        # Check if integration domain data exists yet
         if DOMAIN not in self.hass.data:
             return None
             
-        # Find the config entry that contains this dial
+        # Find the config entry that contains this dial UID
         for entry_id, data in self.hass.data[DOMAIN].items():
             if isinstance(data, dict) and "coordinator" in data:
                 coordinator = data["coordinator"]

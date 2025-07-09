@@ -39,13 +39,10 @@ async def async_setup_entry(
 
     entities = []
     
-    # Create number entities for each dial
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
-        # Add main dial control number
         entities.append(VU1DialNumber(coordinator, client, dial_uid, dial_info))
         
-        # Add configuration number entities
         entities.extend([
             VU1ValueMinNumber(coordinator, dial_uid, dial_info),
             VU1ValueMaxNumber(coordinator, dial_uid, dial_info),
@@ -95,7 +92,7 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
             model=MODEL,
             sw_version="1.0",
             # Add via_device to link to the VU1 server hub
-            via_device=(DOMAIN, self.coordinator.server_device_id),
+            via_device=(DOMAIN, self.coordinator.server_device_identifier),
         )
 
     @property

@@ -28,10 +28,8 @@ async def async_setup_entry(
 
     entities = []
     
-    # Create provision new dials button for server device
     entities.append(VU1ProvisionDialsButton(coordinator, client))
     
-    # Create refresh and identify buttons for each dial
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
         entities.append(VU1RefreshHardwareInfoButton(coordinator, client, dial_uid, dial_info))
@@ -47,7 +45,7 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
         """Initialize the provision dials button."""
         super().__init__(coordinator)
         self._client = client
-        self._attr_unique_id = f"{coordinator.server_device_id}_provision_new_dials"
+        self._attr_unique_id = f"{coordinator.server_device_identifier}_provision_new_dials"
         self._attr_name = "Provision new dials"
         self._attr_has_entity_name = True
         self._attr_entity_category = EntityCategory.CONFIG
@@ -57,7 +55,7 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
     def device_info(self) -> Dict[str, Any]:
         """Return device information for the VU1 server."""
         return {
-            "identifiers": {(DOMAIN, self.coordinator.server_device_id)},
+            "identifiers": {(DOMAIN, self.coordinator.server_device_identifier)},
             "manufacturer": "Streacom",
             "model": "VU1 Server",
         }
@@ -109,7 +107,7 @@ class VU1RefreshHardwareInfoButton(CoordinatorEntity, ButtonEntity):
             "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
             "manufacturer": "Streacom",
             "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_id),
+            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
         }
 
     async def async_press(self) -> None:
@@ -162,7 +160,7 @@ class VU1IdentifyDialButton(CoordinatorEntity, ButtonEntity):
             "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
             "manufacturer": "Streacom",
             "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_id),
+            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
         }
 
     async def async_press(self) -> None:
