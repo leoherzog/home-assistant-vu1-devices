@@ -112,7 +112,7 @@ class VU1SensorBindingManager:
         # Clean up any existing debouncer to prevent memory leaks
         if existing_debouncer := self._debouncers.get(dial_uid):
             _LOGGER.debug("Cleaning up existing debouncer for dial %s", dial_uid)
-            await existing_debouncer.async_shutdown()
+            existing_debouncer.async_cancel()
             del self._debouncers[dial_uid]
 
         # Store binding info
@@ -161,7 +161,7 @@ class VU1SensorBindingManager:
 
         # Cancel and remove debouncer
         if debouncer := self._debouncers.pop(dial_uid, None):
-            await debouncer.async_shutdown()
+            debouncer.async_cancel()
 
         # Remove binding
         del self._bindings[dial_uid]
@@ -314,7 +314,8 @@ class VU1SensorBindingManager:
         """Shutdown the binding manager."""
         # Cancel all debouncers
         for debouncer in self._debouncers.values():
-            await debouncer.async_shutdown()
+            if debouncer:
+                debouncer.async_cancel()
         
         # Remove all bindings
         dial_uids = list(self._bindings.keys())
