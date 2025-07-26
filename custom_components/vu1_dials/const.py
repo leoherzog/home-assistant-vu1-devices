@@ -29,6 +29,7 @@ PLATFORMS = ["sensor", "number", "light", "select", "button", "image"]
 SERVICE_SET_DIAL_VALUE = "set_dial_value"
 SERVICE_SET_DIAL_BACKLIGHT = "set_dial_backlight"
 SERVICE_SET_DIAL_NAME = "set_dial_name"
+SERVICE_SET_DIAL_IMAGE = "set_dial_image"
 SERVICE_RELOAD_DIAL = "reload_dial"
 SERVICE_CALIBRATE_DIAL = "calibrate_dial"
 
@@ -39,6 +40,7 @@ ATTR_RED = "red"
 ATTR_GREEN = "green"
 ATTR_BLUE = "blue"
 ATTR_NAME = "name"
+ATTR_MEDIA_CONTENT_ID = "media_content_id"
 
 # Device info
 MANUFACTURER = "Streacom"

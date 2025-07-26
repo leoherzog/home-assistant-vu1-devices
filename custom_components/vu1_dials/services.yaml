@@ -81,6 +81,26 @@ set_dial_name:
       selector:
         text:
 
+set_dial_image:
+  name: Set Dial Background Image
+  description: Set the background image of a VU1 dial using media from Home Assistant's media library.
+  fields:
+    dial_uid:
+      name: Dial UID
+      description: The unique identifier of the dial (found in dial attributes)
+      required: true
+      example: "590056000650564139323920"
+      selector:
+        text:
+    media_content_id:
+      name: Media Content
+      description: Select an image from your media library to set as the dial background
+      required: true
+      selector:
+        media:
+          filter:
+            - image
+
 reload_dial:
   name: Reload Dial
   description: Reload hardware configuration and refresh information for a VU1 dial. Also available as a button entity for each dial.

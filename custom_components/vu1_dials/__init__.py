@@ -1,8 +1,12 @@
 """The VU1 Dials integration."""
 import asyncio
 import logging
+import mimetypes
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -25,6 +29,7 @@ from .const import (
     SERVICE_SET_DIAL_VALUE,
     SERVICE_SET_DIAL_BACKLIGHT,
     SERVICE_SET_DIAL_NAME,
+    SERVICE_SET_DIAL_IMAGE,
     SERVICE_RELOAD_DIAL,
     SERVICE_CALIBRATE_DIAL,
     ATTR_DIAL_UID,
@@ -33,6 +38,7 @@ from .const import (
     ATTR_GREEN,
     ATTR_BLUE,
     ATTR_NAME,
+    ATTR_MEDIA_CONTENT_ID,
 )
 from .vu1_api import VU1APIClient, VU1APIError
 
@@ -497,6 +503,67 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
             _LOGGER.error("Service call failed to set dial name for %s: %s", dial_uid, err)
             raise
 
+    async def set_dial_image(call: ServiceCall) -> None:
+        """Set dial background image service."""
+        from homeassistant.components.media_source import async_resolve_media
+
+        dial_uid = call.data[ATTR_DIAL_UID]
+        media_content_id = call.data[ATTR_MEDIA_CONTENT_ID]
+        
+        if not media_content_id:
+            _LOGGER.error("No media content ID provided for dial image")
+            raise ValueError("Media content ID is required")
+        
+        try:
+            # Resolve the media source URI to get actual file path/data
+            _LOGGER.debug("Resolving media content ID: %s", media_content_id)
+            resolved_media = await async_resolve_media(hass, media_content_id, None)
+            
+            if not resolved_media.url:
+                raise ValueError("Could not resolve media content to URL")
+            
+            # Read the image data from the resolved URL
+            if resolved_media.url.startswith("file://"):
+                # Local file access
+                file_path = resolved_media.url[7:]  # Remove 'file://' prefix
+                
+                # Use async-friendly file operations to avoid blocking the event loop
+                if not await hass.async_add_executor_job(Path(file_path).exists):
+                    raise ValueError(f"Media file not found: {file_path}")
+                
+                image_data = await hass.async_add_executor_job(Path(file_path).read_bytes)
+                
+                # Determine content type from file extension
+                content_type, _ = mimetypes.guess_type(file_path)
+                if not content_type or not content_type.startswith('image/'):
+                    content_type = 'image/png'  # Default fallback
+                    
+            else:
+                # Handle other URL types (HTTP, etc.) if needed
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(resolved_media.url) as response:
+                        if response.status != 200:
+                            raise ValueError(f"Failed to fetch media: HTTP {response.status}")
+                        image_data = await response.read()
+                        content_type = response.headers.get('content-type', 'image/png')
+            
+            if not image_data:
+                raise ValueError("No image data retrieved from media source")
+            
+            _LOGGER.debug("Retrieved image data: %d bytes, content-type: %s", len(image_data), content_type)
+            
+            # Upload to VU1 dial
+            await _execute_dial_service(
+                hass, dial_uid, "set dial image",
+                lambda client: client.set_dial_image(dial_uid, image_data, content_type)
+            )
+            
+            _LOGGER.info("Successfully set background image for dial %s", dial_uid)
+            
+        except Exception as err:
+            _LOGGER.error("Failed to set dial image for %s: %s", dial_uid, err)
+            raise
+
     async def reload_dial(call: ServiceCall) -> None:
         """Reload dial service."""
         dial_uid = call.data[ATTR_DIAL_UID]
@@ -549,6 +616,18 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
             {
                 vol.Required(ATTR_DIAL_UID): cv.string,
                 vol.Required(ATTR_NAME): cv.string,
+            }
+        ),
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_DIAL_IMAGE,
+        set_dial_image,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_DIAL_UID): cv.string,
+                vol.Required(ATTR_MEDIA_CONTENT_ID): cv.string,
             }
         ),
     )

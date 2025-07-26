@@ -219,6 +219,50 @@ class VU1APIClient:
         response = await self._request("GET", f"api/v0/dial/{dial_uid}/image/get")
         return response.get("data", b"")
 
+    async def set_dial_image(self, dial_uid: str, image_data: bytes, content_type: str = "image/png") -> None:
+        """Set dial background image via multipart form upload."""
+        self._validate_dial_uid(dial_uid)
+        if not image_data:
+            raise ValueError("image_data cannot be empty")
+        
+        url = f"{self.base_url}/api/v0/dial/{dial_uid}/image/set"
+        headers, params = self._prepare_auth_headers_and_params(f"api/v0/dial/{dial_uid}/image/set")
+        
+        # Create multipart form data
+        form_data = aiohttp.FormData()
+        form_data.add_field('image', image_data, filename='background.png', content_type=content_type)
+        
+        try:
+            _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(image_data))
+            async with self.session.request("POST", url, data=form_data, params=params, headers=headers) as response:
+                _LOGGER.debug("Image upload response status: %s", response.status)
+                
+                if response.status >= 400:
+                    try:
+                        error_body = await response.text()
+                        _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
+                    except:
+                        _LOGGER.debug("Could not read error response body")
+                
+                response.raise_for_status()
+                
+                if response.content_type == "application/json":
+                    data = await response.json()
+                    if data.get("status") != "ok":
+                        raise VU1APIError(f"API error: {data.get('message', 'Unknown error')}")
+                
+                _LOGGER.debug("Successfully uploaded image to dial %s", dial_uid)
+                    
+        except aiohttp.ClientResponseError as err:
+            if err.status == 401:
+                raise VU1APIError(f"Authentication failed: Invalid API key") from err
+            elif err.status == 403:
+                raise VU1APIError(f"Access forbidden: Invalid API key") from err
+            else:
+                raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
+        except (ClientError, asyncio.TimeoutError) as err:
+            raise VU1APIError(f"Connection error: {err}") from err
+
 
     async def reload_dial(self, dial_uid: str) -> None:
         """Reload dial configuration."""
