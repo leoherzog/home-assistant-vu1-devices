@@ -508,7 +508,7 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         from homeassistant.components.media_source import async_resolve_media
 
         dial_uid = call.data[ATTR_DIAL_UID]
-        media_content_id = call.data[ATTR_MEDIA_CONTENT_ID]
+        media_content_id = call.data.get(ATTR_MEDIA_CONTENT_ID)
         
         if not media_content_id:
             _LOGGER.error("No media content ID provided for dial image")
@@ -627,7 +627,7 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
         schema=vol.Schema(
             {
                 vol.Required(ATTR_DIAL_UID): cv.string,
-                vol.Required(ATTR_MEDIA_CONTENT_ID): cv.string,
+                vol.Optional(ATTR_MEDIA_CONTENT_ID): cv.string,
             }
         ),
     )
