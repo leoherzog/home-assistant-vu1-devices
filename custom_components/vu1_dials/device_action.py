@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, Context
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.typing import ConfigType, TemplateVarsType
 
@@ -86,7 +87,7 @@ async def async_call_action_from_config(
     if action_type == ACTION_CONFIGURE_DIAL:
         await _async_configure_dial(hass, config)
     else:
-        raise ValueError(f"Unknown action type: {action_type}")
+        raise HomeAssistantError(f"Unknown action type: {action_type}")
 
 
 async def async_get_action_capabilities(
@@ -132,7 +133,7 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
     dial_uid = await _get_dial_uid_for_device(hass, device_id)
     
     if not dial_uid:
-        raise ValueError(f"Device {device_id} is not a VU1 dial")
+        raise HomeAssistantError(f"Device {device_id} is not a VU1 dial")
     
     # Prepare configuration
     dial_config = {}

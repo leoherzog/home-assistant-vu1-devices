@@ -26,6 +26,7 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         super().__init__(coordinator)
         self._dial_uid = dial_uid
         self._dial_data = dial_data
+        self._config_manager = async_get_config_manager(coordinator.hass)
         self._attr_entity_category = EntityCategory.CONFIG
         self._attr_has_entity_name = True
 
@@ -34,16 +35,14 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         await super().async_added_to_hass()
         
         # Register as a listener for configuration changes
-        config_manager = async_get_config_manager(self.hass)
-        config_manager.async_add_listener(self._dial_uid, self._on_config_change)
+        self._config_manager.async_add_listener(self._dial_uid, self._on_config_change)
 
     async def async_will_remove_from_hass(self) -> None:
         """Unregister from configuration change notifications."""
         await super().async_will_remove_from_hass()
         
         # Unregister as a listener
-        config_manager = async_get_config_manager(self.hass)
-        config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
+        self._config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
 
     async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
         """Handle configuration changes from external sources."""
@@ -69,12 +68,11 @@ class VU1ConfigEntityBase(CoordinatorEntity):
 
     async def _update_config(self, **config_updates) -> None:
         """Update dial configuration with optimized sensor binding handling."""
-        config_manager = async_get_config_manager(self.hass)
-        current_config = config_manager.get_dial_config(self._dial_uid)
+        current_config = self._config_manager.get_dial_config(self._dial_uid)
         new_config = {**current_config, **config_updates}
         
         # Save the configuration first
-        await config_manager.async_update_dial_config(self._dial_uid, new_config)
+        await self._config_manager.async_update_dial_config(self._dial_uid, new_config)
         
         # Only update sensor bindings if binding-related keys changed
         binding_keys = {"bound_entity", "update_mode", "value_min", "value_max"}
@@ -142,8 +140,7 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         # This prevents sync loops even if subsequent operations fail
         coordinator.mark_behavior_change_from_ha(self._dial_uid)
 
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         
         # Determine which config keys and API method to use
         if easing_type == "dial":
@@ -186,14 +183,12 @@ class VU1ValueMinNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_max_value = 1000
         self._attr_native_step = 0.1
         # Initialize with current config value
-        config_manager = async_get_config_manager(coordinator.hass)
-        config = config_manager.get_dial_config(dial_uid)
+        config = self._config_manager.get_dial_config(dial_uid)
         self._attr_native_value = config.get("value_min", 0)
 
     async def _sync_from_config(self) -> None:
         """Sync from configuration."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         self._attr_native_value = config.get("value_min", 0)
 
     @property
@@ -232,14 +227,12 @@ class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_max_value = 1000
         self._attr_native_step = 0.1
         # Initialize with current config value
-        config_manager = async_get_config_manager(coordinator.hass)
-        config = config_manager.get_dial_config(dial_uid)
+        config = self._config_manager.get_dial_config(dial_uid)
         self._attr_native_value = config.get("value_max", 100)
 
     async def _sync_from_config(self) -> None:
         """Sync from configuration."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         self._attr_native_value = config.get("value_max", 100)
 
     @property
@@ -279,14 +272,12 @@ class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_step = 10
         self._attr_native_unit_of_measurement = "ms"
         # Initialize with current config value
-        config_manager = async_get_config_manager(coordinator.hass)
-        config = config_manager.get_dial_config(dial_uid)
+        config = self._config_manager.get_dial_config(dial_uid)
         self._attr_native_value = config.get("dial_easing_period", 50)
 
     async def _sync_from_config(self) -> None:
         """Sync from configuration."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         self._attr_native_value = config.get("dial_easing_period", 50)
 
     @property
@@ -329,14 +320,12 @@ class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_step = 1
         self._attr_native_unit_of_measurement = "%"
         # Initialize with current config value
-        config_manager = async_get_config_manager(coordinator.hass)
-        config = config_manager.get_dial_config(dial_uid)
+        config = self._config_manager.get_dial_config(dial_uid)
         self._attr_native_value = config.get("dial_easing_step", 5)
 
     async def _sync_from_config(self) -> None:
         """Sync from configuration."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         self._attr_native_value = config.get("dial_easing_step", 5)
 
     @property
@@ -379,14 +368,12 @@ class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_step = 10
         self._attr_native_unit_of_measurement = "ms"
         # Initialize with current config value
-        config_manager = async_get_config_manager(coordinator.hass)
-        config = config_manager.get_dial_config(dial_uid)
+        config = self._config_manager.get_dial_config(dial_uid)
         self._attr_native_value = config.get("backlight_easing_period", 50)
 
     async def _sync_from_config(self) -> None:
         """Sync from configuration."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         self._attr_native_value = config.get("backlight_easing_period", 50)
 
     @property
@@ -414,37 +401,6 @@ class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
             self.async_write_ha_state()
             raise HomeAssistantError(f"Failed to update backlight easing period: {err}")
 
-    # REMOVED: Duplicated method - now using shared _apply_easing_config_to_server() method
-    # async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
-        """Apply easing configuration to server with specific new values."""
-        from . import _get_dial_client_and_coordinator
-        
-        _LOGGER.debug("Attempting to apply backlight easing config for %s", self._dial_uid)
-        result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        
-        if not result:
-            _LOGGER.error("Failed to get client/coordinator for dial %s - cannot apply easing config", self._dial_uid)
-            raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
-            
-        client, coordinator = result
-        
-        coordinator.mark_behavior_change_from_ha(self._dial_uid)
-
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        
-        # Use new values if provided, otherwise use current config
-        period = new_period if new_period is not None else config.get("backlight_easing_period", 50)
-        step = new_step if new_step is not None else config.get("backlight_easing_step", 5)
-        
-        try:
-            _LOGGER.info("Setting backlight easing for %s: period=%d, step=%d", self._dial_uid, period, step)
-            await client.set_backlight_easing(self._dial_uid, period, step)
-            await coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
-            raise HomeAssistantError(f"Failed to apply backlight easing: {err}")
-
 class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for backlight easing step."""
 
@@ -459,14 +415,12 @@ class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
         self._attr_native_step = 1
         self._attr_native_unit_of_measurement = "%"
         # Initialize with current config value
-        config_manager = async_get_config_manager(coordinator.hass)
-        config = config_manager.get_dial_config(dial_uid)
+        config = self._config_manager.get_dial_config(dial_uid)
         self._attr_native_value = config.get("backlight_easing_step", 5)
 
     async def _sync_from_config(self) -> None:
         """Sync from configuration."""
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         self._attr_native_value = config.get("backlight_easing_step", 5)
 
     @property
@@ -493,37 +447,6 @@ class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
             self._attr_native_value = old_value
             self.async_write_ha_state()
             raise HomeAssistantError(f"Failed to update backlight easing step: {err}")
-
-    # REMOVED: Duplicated method - now using shared _apply_easing_config_to_server() method
-    # async def _apply_easing_config_with_new_value(self, new_period: Optional[int], new_step: Optional[int]) -> None:
-        """Apply easing configuration to server with specific new values."""
-        from . import _get_dial_client_and_coordinator
-        
-        _LOGGER.debug("Attempting to apply backlight easing config for %s", self._dial_uid)
-        result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        
-        if not result:
-            _LOGGER.error("Failed to get client/coordinator for dial %s - cannot apply easing config", self._dial_uid)
-            raise HomeAssistantError(f"Cannot communicate with dial {self._dial_uid}")
-            
-        client, coordinator = result
-        
-        coordinator.mark_behavior_change_from_ha(self._dial_uid)
-
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
-        
-        # Use new values if provided, otherwise use current config
-        period = new_period if new_period is not None else config.get("backlight_easing_period", 50)
-        step = new_step if new_step is not None else config.get("backlight_easing_step", 5)
-        
-        try:
-            _LOGGER.info("Setting backlight easing for %s: period=%d, step=%d", self._dial_uid, period, step)
-            await client.set_backlight_easing(self._dial_uid, period, step)
-            await coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Failed to set backlight easing for %s: %s", self._dial_uid, err)
-            raise HomeAssistantError(f"Failed to apply backlight easing: {err}")
 
 class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
     """Sensor showing current update mode."""
@@ -556,8 +479,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         if not self.hass:
             return "unknown"
             
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         return config.get("update_mode", "manual").title()
 
     @property
@@ -566,8 +488,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         if not self.hass:
             return {}
             
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         
         attrs = {
             "update_mode": config.get("update_mode", "manual"),
@@ -613,8 +534,7 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         if not self.hass:
             return "None"
             
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         
         if config.get("update_mode") != "automatic":
             return "Manual Update Mode"
@@ -638,8 +558,7 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         if not self.hass:
             return {}
             
-        config_manager = async_get_config_manager(self.hass)
-        config = config_manager.get_dial_config(self._dial_uid)
+        config = self._config_manager.get_dial_config(self._dial_uid)
         
         attrs = {
             "update_mode": config.get("update_mode", "manual"),

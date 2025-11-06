@@ -4,9 +4,7 @@ import logging
 import mimetypes
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
-
-import aiohttp
+from typing import Any, Awaitable, Dict, List, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -15,7 +13,9 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import EVENT_DEVICE_REGISTRY_UPDATED, EventDeviceRegistryUpdatedData
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
+from homeassistant.util import dt as dt_util
 import voluptuous as vol
 
 from .const import (
@@ -81,24 +81,40 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed("Invalid dial list format")
             
             # Get detailed status for each dial
-            dial_data = {}
+            dial_data: Dict[str, Any] = {}
+            dial_refs: List[tuple[str, Dict[str, Any]]] = []
+            dial_tasks: List[Awaitable[Dict[str, Any]]] = []
+
             for dial in dials:
                 if not isinstance(dial, dict) or "uid" not in dial:
                     _LOGGER.warning("Invalid dial data: %s", dial)
                     continue
-                    
+
                 dial_uid = dial["uid"]
-                try:
-                    status = await self.client.get_dial_status(dial_uid)
-                    dial_data[dial_uid] = {**dial, "detailed_status": status}
-                    
-                    await self._sync_name_from_server(dial_uid, dial.get("dial_name"))
-                    await self._check_server_behavior_change(dial_uid, status)
-                    
-                except VU1APIError as err:
-                    _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, err)
-                    # Still include the dial with basic info if status fails
+                dial_refs.append((dial_uid, dial))
+                dial_tasks.append(self.client.get_dial_status(dial_uid))
+
+            if dial_tasks:
+                results = await asyncio.gather(*dial_tasks, return_exceptions=True)
+            else:
+                results = []
+
+            for (dial_uid, dial), result in zip(dial_refs, results):
+                if isinstance(result, BaseException):
+                    if isinstance(result, VU1APIError):
+                        _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, result)
+                    elif isinstance(result, asyncio.CancelledError):
+                        _LOGGER.debug("Status update cancelled for dial %s", dial_uid)
+                    else:
+                        _LOGGER.error("Unexpected error getting status for dial %s", dial_uid, exc_info=result)
                     dial_data[dial_uid] = {**dial, "detailed_status": {}}
+                    continue
+
+                status: Dict[str, Any] = result
+                dial_data[dial_uid] = {**dial, "detailed_status": status}
+
+                await self._sync_name_from_server(dial_uid, dial.get("dial_name"))
+                await self._check_server_behavior_change(dial_uid, status)
 
             if hasattr(self, '_binding_manager') and self._binding_manager:
                 await self._binding_manager.async_update_bindings({"dials": dial_data})
@@ -122,8 +138,9 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             return
 
         # Check if we're in a grace period (change originated from HA)
+        current_time = dt_util.utcnow()
         grace_end = self._name_change_grace_periods.get(dial_uid)
-        if grace_end and datetime.now() < grace_end:
+        if grace_end and current_time < grace_end:
             _LOGGER.debug("Ignoring server name change for %s during grace period", dial_uid)
             return
 
@@ -138,7 +155,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             
     def mark_name_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a name change originated from HA to prevent sync loops."""
-        grace_end = datetime.now() + timedelta(seconds=self._grace_period_seconds)
+        grace_end = dt_util.utcnow() + timedelta(seconds=self._grace_period_seconds)
         self._name_change_grace_periods[dial_uid] = grace_end
         _LOGGER.debug("Started name change grace period for %s until %s", dial_uid, grace_end.isoformat())
 
@@ -172,8 +189,9 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
     async def _handle_device_name_change(self, dial_uid: str, new_name: str) -> None:
         """Handle device name change from HA UI."""
         # Check if we're in a grace period (change originated from server)
+        current_time = dt_util.utcnow()
         grace_end = self._name_change_grace_periods.get(dial_uid)
-        if grace_end and datetime.now() < grace_end:
+        if grace_end and current_time < grace_end:
             _LOGGER.debug("Ignoring HA name change for %s during grace period", dial_uid)
             return
             
@@ -191,7 +209,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 
     def mark_behavior_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a behavior change originated from HA to prevent sync loops."""
-        grace_end = datetime.now() + timedelta(seconds=self._grace_period_seconds)
+        grace_end = dt_util.utcnow() + timedelta(seconds=self._grace_period_seconds)
         self._behavior_change_grace_periods[dial_uid] = grace_end
         _LOGGER.debug(
             "Started behavior grace period for %s until %s",
@@ -203,7 +221,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         if not status:
             return
             
-        current_time = datetime.now()
+        current_time = dt_util.utcnow()
         grace_end = self._behavior_change_grace_periods.get(dial_uid)
         if grace_end and current_time < grace_end:
             _LOGGER.debug("Ignoring server behavior change for %s during grace period", dial_uid)
@@ -389,7 +407,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     if coordinator.data:
         dials_data = coordinator.data.get("dials", {})
-        await binding_manager.async_update_bindings(dials_data)
+        await binding_manager.async_update_bindings({"dials": dials_data})
 
     return True
 
@@ -540,12 +558,12 @@ async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> Non
                     
             else:
                 # Handle other URL types (HTTP, etc.) if needed
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(resolved_media.url) as response:
-                        if response.status != 200:
-                            raise ValueError(f"Failed to fetch media: HTTP {response.status}")
-                        image_data = await response.read()
-                        content_type = response.headers.get('content-type', 'image/png')
+                session = async_get_clientsession(hass)
+                async with session.get(resolved_media.url) as response:
+                    if response.status != 200:
+                        raise ValueError(f"Failed to fetch media: HTTP {response.status}")
+                    image_data = await response.read()
+                    content_type = response.headers.get('content-type', 'image/png')
             
             if not image_data:
                 raise ValueError("No image data retrieved from media source")

@@ -88,7 +88,6 @@ class VU1APIClient:
         # Always add VU1 API key as query parameter
         if self.api_key:
             params["key"] = self.api_key
-            _LOGGER.debug("Using API key authentication")
             
         return headers, params
 
