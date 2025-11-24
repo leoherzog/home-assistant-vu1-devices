@@ -403,7 +403,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    await async_setup_services(hass, client)
+    await async_setup_services(hass)
     
     if coordinator.data:
         dials_data = coordinator.data.get("dials", {})
@@ -415,18 +415,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    
+
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
         client = data["client"]
         coordinator = data["coordinator"]
         binding_manager = data.get("binding_manager")
-        
+
         await client.close()
-        
+
         if binding_manager:
             await binding_manager.async_shutdown()
-        
+
         # Clean up server device from device registry
         device_registry = dr.async_get(hass)
         device = device_registry.async_get_device(
@@ -434,9 +434,22 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         if device:
             device_registry.async_remove_device(device.id)
-        
+
+        # Unregister services if this is the last config entry
+        if not hass.data[DOMAIN]:
+            async_unload_services(hass)
 
     return unload_ok
+
+
+def async_unload_services(hass: HomeAssistant) -> None:
+    """Unload VU1 services."""
+    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_VALUE)
+    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_BACKLIGHT)
+    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_NAME)
+    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_IMAGE)
+    hass.services.async_remove(DOMAIN, SERVICE_RELOAD_DIAL)
+    hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_DIAL)
 
 
 def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tuple[VU1APIClient, VU1DataUpdateCoordinator] | None:
@@ -478,8 +491,11 @@ async def _execute_dial_service(
         raise
 
 
-async def async_setup_services(hass: HomeAssistant, client: VU1APIClient) -> None:
+async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for VU1 integration."""
+    # Only register services once (check if already registered)
+    if hass.services.has_service(DOMAIN, SERVICE_SET_DIAL_VALUE):
+        return
 
     async def set_dial_value(call: ServiceCall) -> None:
         """Set dial value service."""

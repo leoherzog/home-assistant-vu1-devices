@@ -2,6 +2,7 @@
 import asyncio
 import functools
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from homeassistant.core import HomeAssistant, State, callback
@@ -242,7 +243,6 @@ class VU1SensorBindingManager:
                 return None
             
             # Extract first numeric value from string (e.g., "23.5°C" -> 23.5)
-            import re
             match = re.search(r'[-+]?\d*\.?\d+', str(state.state))
             if match:
                 return float(match.group())

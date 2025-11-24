@@ -112,7 +112,7 @@ class VU1APIClient:
                     try:
                         error_body = await response.text()
                         _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
-                    except:
+                    except Exception:
                         _LOGGER.debug("Could not read error response body")
                 
                 response.raise_for_status()
@@ -240,7 +240,7 @@ class VU1APIClient:
                     try:
                         error_body = await response.text()
                         _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
-                    except:
+                    except Exception:
                         _LOGGER.debug("Could not read error response body")
                 
                 response.raise_for_status()

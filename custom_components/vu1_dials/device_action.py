@@ -1,6 +1,6 @@
 """Device actions for VU1 dials."""
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import voluptuous as vol
 
@@ -219,7 +219,7 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
     _LOGGER.info("Updated and applied configuration for dial %s", dial_uid)
 
 
-async def _get_dial_uid_for_device(hass: HomeAssistant, device_id: str) -> str:
+async def _get_dial_uid_for_device(hass: HomeAssistant, device_id: str) -> Optional[str]:
     """Get dial UID for a device ID."""
     from homeassistant.helpers import device_registry as dr
     

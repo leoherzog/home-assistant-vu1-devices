@@ -4,8 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er, device_registry as dr
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -72,8 +71,6 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
         self._attr_unique_id = f"{DOMAIN}_dial_{dial_uid}"
         self._attr_name = "Value"
         self._attr_has_entity_name = True
-        self._entity_registry_updated_unsub = None
-        self._device_registry_updated_unsub = None
         self._attr_native_min_value = 0
         self._attr_native_max_value = 100
         self._attr_native_step = 1
@@ -83,7 +80,7 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this VU1 dial."""
-        dials_data = self.coordinator.data.get("dials", {})
+        dials_data = self.coordinator.data.get("dials", {}) if self.coordinator.data else {}
         dial_data = dials_data.get(self._dial_uid, {})
         return DeviceInfo(
             identifiers={(DOMAIN, self._dial_uid)},
@@ -98,6 +95,8 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
     @property
     def native_value(self) -> Optional[float]:
         """Return the current value."""
+        if not self.coordinator.data:
+            return 0.0
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
         detailed_status = dial_data.get("detailed_status", {})
@@ -143,6 +142,8 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return additional state attributes."""
+        if not self.coordinator.data:
+            return {"dial_uid": self._dial_uid}
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
         
