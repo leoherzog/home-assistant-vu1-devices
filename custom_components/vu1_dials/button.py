@@ -15,6 +15,8 @@ from .vu1_api import VU1APIClient
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = ["async_setup_entry"]
+
 
 async def async_setup_entry(
     hass: HomeAssistant,

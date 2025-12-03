@@ -1,6 +1,6 @@
 """Config flow for VU1 Dials integration."""
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
@@ -15,6 +15,8 @@ from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = ["ConfigFlow", "OptionsFlowHandler"]
+
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VU1 Dials."""
@@ -23,20 +25,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize config flow."""
-        self._discovered_host: Optional[str] = None
-        self._discovered_port: Optional[int] = None
-        self._discovery_method: Optional[str] = None
+        self._discovered_host: str | None = None
+        self._discovered_port: int | None = None
+        self._discovery_method: str | None = None
         self._discovered_ingress: bool = False
-        self._discovered_slug: Optional[str] = None
-        self._supervisor_token: Optional[str] = None
+        self._discovered_slug: str | None = None
+        self._supervisor_token: str | None = None
         self._addon_available: bool = False
-        self._addon_name: Optional[str] = None
+        self._addon_name: str | None = None
 
     async def async_step_user(
-        self, user_input: Optional[Dict[str, Any]] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the initial step - show connection type selection."""
-        errors: Dict[str, str] = {}
+        errors: dict[str, str] = {}
 
         if user_input is None:
             # First, check if VU1 Server add-on is available via Supervisor API
@@ -88,10 +90,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_manual()
 
     async def async_step_manual(
-        self, user_input: Optional[Dict[str, Any]] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle manual configuration."""
-        errors: Dict[str, str] = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             # Set unique ID to prevent duplicate manual configurations
@@ -126,10 +128,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_addon(
-        self, user_input: Optional[Dict[str, Any]] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle add-on configuration."""
-        errors: Dict[str, str] = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             # Build configuration using discovered add-on details
@@ -200,10 +202,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._dial_config_data = {}
 
     async def async_step_init(
-        self, user_input: Optional[Dict[str, Any]] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options."""
-        errors: Dict[str, str] = {}
+        errors: dict[str, str] = {}
         
         try:
             coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
@@ -249,10 +251,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
     async def async_step_configure_dial(
-        self, user_input: Optional[Dict[str, Any]] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Configure specific dial with proper entity selector."""
-        errors: Dict[str, str] = {}
+        errors: dict[str, str] = {}
         
         if not self._selected_dial:
             return await self.async_step_init()
@@ -302,10 +304,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
     async def async_step_configure_automatic(
-        self, user_input: Optional[Dict[str, Any]] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Configure automatic mode with sensor binding."""
-        errors: Dict[str, str] = {}
+        errors: dict[str, str] = {}
         
         if not self._selected_dial:
             return await self.async_step_init()
@@ -382,7 +384,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
     async def async_step_configure_manual(
-        self, user_input: Optional[Dict[str, Any]] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Configure manual mode (just saves the mode)."""
         if not self._selected_dial:
@@ -421,7 +423,7 @@ class InvalidAuth(HomeAssistantError):
     """Error to indicate there is invalid auth."""
 
 
-async def validate_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[str, Any]:
+async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect.
 
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.

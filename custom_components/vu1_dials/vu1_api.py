@@ -1,13 +1,15 @@
 """VU1 API Client for communicating with VU1 server."""
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiohttp
 from aiohttp import ClientError, ClientTimeout
 import os
 
 _LOGGER = logging.getLogger(__name__)
+
+__all__ = ["VU1APIClient", "VU1APIError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT"]
 
 DEFAULT_PORT = 5340
 DEFAULT_TIMEOUT = 10
@@ -25,9 +27,9 @@ class VU1APIClient:
         host: str = "localhost",
         port: int = DEFAULT_PORT,
         api_key: str = "",
-        session: Optional[aiohttp.ClientSession] = None,
-        ingress_slug: Optional[str] = None,
-        supervisor_token: Optional[str] = None,
+        session: aiohttp.ClientSession | None = None,
+        ingress_slug: str | None = None,
+        supervisor_token: str | None = None,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         """Initialize VU1 API client."""
@@ -65,7 +67,7 @@ class VU1APIClient:
         if self._session and self._close_session:
             await self._session.close()
 
-    def _prepare_auth_headers_and_params(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> tuple[Dict[str, str], Dict[str, Any]]:
+    def _prepare_auth_headers_and_params(self, endpoint: str, params: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
         """Prepare authentication headers and parameters for API requests.
         
         Args:
@@ -95,8 +97,8 @@ class VU1APIClient:
         self,
         method: str,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Make an API request."""
         url = f"{self.base_url}/{endpoint}"
         headers, params = self._prepare_auth_headers_and_params(endpoint, params)
@@ -139,7 +141,7 @@ class VU1APIClient:
         except (ClientError, asyncio.TimeoutError) as err:
             raise VU1APIError(f"Connection error: {err}") from err
 
-    async def test_connection(self) -> Dict[str, Any]:
+    async def test_connection(self) -> dict[str, Any]:
         """Test connection and API key, returning detailed status."""
         _LOGGER.debug("Testing connection to VU1 server at %s", self.base_url)
         try:
@@ -171,7 +173,7 @@ class VU1APIClient:
                 "error": f"Connection error: {err}",
             }
 
-    async def get_dial_list(self) -> List[Dict[str, Any]]:
+    async def get_dial_list(self) -> list[dict[str, Any]]:
         """Get list of available dials."""
         response = await self._request("GET", "api/v0/dial/list")
         return response.get("data", [])
@@ -199,7 +201,7 @@ class VU1APIClient:
             {"red": red, "green": green, "blue": blue},
         )
 
-    async def get_dial_status(self, dial_uid: str) -> Dict[str, Any]:
+    async def get_dial_status(self, dial_uid: str) -> dict[str, Any]:
         """Get dial status."""
         self._validate_dial_uid(dial_uid)
         response = await self._request("GET", f"api/v0/dial/{dial_uid}/status")
@@ -284,13 +286,13 @@ class VU1APIClient:
         await self._request("GET", f"api/v0/dial/{dial_uid}/easing/backlight", {"period": period, "step": step})
 
 
-    async def provision_new_dials(self) -> Dict[str, Any]:
+    async def provision_new_dials(self) -> dict[str, Any]:
         """Provision new dials that have been detected by the server."""
         response = await self._request("GET", "api/v0/dial/provision")
         return response.get("data", {})
 
 
-async def discover_vu1_addon() -> Dict[str, Any]:
+async def discover_vu1_addon() -> dict[str, Any]:
     """Discover VU1 Server add-on via Home Assistant Supervisor API."""
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
     if not supervisor_token:

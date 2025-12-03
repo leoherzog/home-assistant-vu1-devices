@@ -26,6 +26,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = ["async_get_actions", "async_call_action_from_config", "async_get_action_capabilities"]
+
 ACTION_CONFIGURE_DIAL = "configure_dial"
 
 

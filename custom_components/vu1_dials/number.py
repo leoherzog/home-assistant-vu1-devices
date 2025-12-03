@@ -1,6 +1,6 @@
 """Support for VU1 dial number entities."""
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -9,7 +9,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .const import DOMAIN, get_dial_device_info
 from .vu1_api import VU1APIClient
 from .config_entities import (
     VU1ValueMinNumber,
@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from . import VU1DataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+__all__ = ["async_setup_entry"]
 
 
 async def async_setup_entry(
@@ -62,7 +64,7 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
         coordinator,
         client: VU1APIClient,
         dial_uid: str,
-        dial_data: Dict[str, Any],
+        dial_data: dict[str, Any],
     ) -> None:
         """Initialize the number entity."""
         super().__init__(coordinator)
@@ -80,20 +82,15 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this VU1 dial."""
-        dials_data = self.coordinator.data.get("dials", {}) if self.coordinator.data else {}
-        dial_data = dials_data.get(self._dial_uid, {})
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._dial_uid)},
-            name=dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
-            manufacturer=MANUFACTURER,
-            model=MODEL,
-            sw_version="1.0",
-            # Add via_device to link to the VU1 server hub
-            via_device=(DOMAIN, self.coordinator.server_device_identifier),
+        dial_data = {}
+        if self.coordinator.data:
+            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        return get_dial_device_info(
+            self._dial_uid, dial_data, self.coordinator.server_device_identifier
         )
 
     @property
-    def native_value(self) -> Optional[float]:
+    def native_value(self) -> float | None:
         """Return the current value."""
         if not self.coordinator.data:
             return 0.0
@@ -140,7 +137,7 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
             await binding_manager.async_reconfigure_dial_binding(self._dial_uid)
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         if not self.coordinator.data:
             return {"dial_uid": self._dial_uid}

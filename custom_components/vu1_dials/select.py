@@ -14,6 +14,8 @@ from .device_config import async_get_config_manager
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = ["async_setup_entry"]
+
 # Preset configurations matching the web UI
 BEHAVIOR_PRESETS = {
     "responsive": {

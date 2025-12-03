@@ -3,7 +3,7 @@ import asyncio
 import functools
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -24,6 +24,8 @@ from .vu1_api import VU1APIClient, VU1APIError
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = ["VU1SensorBindingManager", "async_get_binding_manager"]
+
 # Debounce settings
 DEBOUNCE_SECONDS = 5  # Minimum seconds between API calls per dial
 
@@ -35,18 +37,18 @@ class VU1SensorBindingManager:
         """Initialize the binding manager."""
         self.hass = hass
         # Track active bindings: dial_uid -> {entity_id, config, dial_data, client, last_state}
-        self._bindings: Dict[str, Dict[str, Any]] = {}
+        self._bindings: dict[str, dict[str, Any]] = {}
         # Track state change listeners: entity_id -> listener function
-        self._listeners: Dict[str, Any] = {}
+        self._listeners: dict[str, Any] = {}
         self._config_manager = async_get_config_manager(hass)
         # Debounce API calls to prevent rapid updates: dial_uid -> debouncer
-        self._debouncers: Dict[str, Debouncer] = {}
+        self._debouncers: dict[str, Debouncer] = {}
 
     async def async_setup(self) -> None:
         """Set up the binding manager."""
         await self._config_manager.async_load()
 
-    async def async_update_bindings(self, coordinator_data: Dict[str, Any]) -> None:
+    async def async_update_bindings(self, coordinator_data: dict[str, Any]) -> None:
         """Update bindings based on current dial configurations."""
         # Clean up old bindings for dials that no longer exist
         dial_data = coordinator_data.get("dials", {})
@@ -62,7 +64,7 @@ class VU1SensorBindingManager:
             await self._update_binding(dial_uid, config, dial_data[dial_uid])
 
     async def _update_binding(
-        self, dial_uid: str, config: Dict[str, Any], dial_data: Dict[str, Any]
+        self, dial_uid: str, config: dict[str, Any], dial_data: dict[str, Any]
     ) -> None:
         """Update binding for a specific dial."""
         bound_entity = config.get(CONF_BOUND_ENTITY)
@@ -94,8 +96,8 @@ class VU1SensorBindingManager:
         self,
         dial_uid: str,
         entity_id: str,
-        config: Dict[str, Any],
-        dial_data: Dict[str, Any],
+        config: dict[str, Any],
+        dial_data: dict[str, Any],
     ) -> None:
         """Create a new sensor binding."""
         # Validate entity exists
@@ -232,7 +234,7 @@ class VU1SensorBindingManager:
         except Exception as err:
             _LOGGER.exception("Unexpected error updating dial %s from sensor: %s", dial_uid, err)
 
-    def _parse_sensor_value(self, state: State) -> Optional[float]:
+    def _parse_sensor_value(self, state: State) -> float | None:
         """Parse sensor state to numeric value."""
         try:
             # Try direct numeric conversion
@@ -249,7 +251,7 @@ class VU1SensorBindingManager:
             
             return None
 
-    def _map_value_to_dial(self, sensor_value: float, config: Dict[str, Any]) -> int:
+    def _map_value_to_dial(self, sensor_value: float, config: dict[str, Any]) -> int:
         """Map sensor value to dial range (0-100)."""
         value_min = config.get(CONF_VALUE_MIN, 0)
         value_max = config.get(CONF_VALUE_MAX, 100)
@@ -269,7 +271,7 @@ class VU1SensorBindingManager:
         
         return max(0, min(100, dial_value))
 
-    def _get_client_for_dial(self, dial_uid: str) -> Optional[VU1APIClient]:
+    def _get_client_for_dial(self, dial_uid: str) -> VU1APIClient | None:
         """Get VU1 API client for a specific dial."""
         # Check if integration domain data exists yet
         if DOMAIN not in self.hass.data:

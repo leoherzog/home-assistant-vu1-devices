@@ -1,27 +1,39 @@
 """Configuration entities for VU1 dials."""
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberDeviceClass
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN
+from .const import DOMAIN, get_dial_device_info
 from .device_config import async_get_config_manager
 from .sensor_binding import async_get_binding_manager
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = [
+    "VU1ConfigEntityBase",
+    "VU1ValueMinNumber",
+    "VU1ValueMaxNumber",
+    "VU1DialEasingPeriodNumber",
+    "VU1DialEasingStepNumber",
+    "VU1BacklightEasingPeriodNumber",
+    "VU1BacklightEasingStepNumber",
+    "VU1UpdateModeSensor",
+    "VU1BoundEntitySensor",
+]
+
+
 class VU1ConfigEntityBase(CoordinatorEntity):
     """Base class for VU1 configuration entities."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the config entity."""
         super().__init__(coordinator)
         self._dial_uid = dial_uid
@@ -44,7 +56,7 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         # Unregister as a listener
         self._config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
 
-    async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
+    async def _on_config_change(self, dial_uid: str, config: dict[str, Any]) -> None:
         """Handle configuration changes from external sources."""
         if dial_uid == self._dial_uid:
             # Update local state from configuration and trigger UI update
@@ -56,15 +68,11 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         pass
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information."""
-        return {
-            "identifiers": {(DOMAIN, self._dial_uid)},
-            "name": self._dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
-            "manufacturer": "Streacom",
-            "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
-        }
+        return get_dial_device_info(
+            self._dial_uid, self._dial_data, self.coordinator.server_device_identifier
+        )
 
     async def _update_config(self, **config_updates) -> None:
         """Update dial configuration with optimized sensor binding handling."""
@@ -78,7 +86,7 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         binding_keys = {"bound_entity", "update_mode", "value_min", "value_max"}
         if any(key in config_updates for key in binding_keys):
             binding_manager = async_get_binding_manager(self.hass)
-            await binding_manager._update_binding(self._dial_uid, new_config, self._dial_data)
+            await binding_manager.async_reconfigure_dial_binding(self._dial_uid)
         
         # If easing values changed, trigger behavior select update
         easing_keys = {
@@ -115,8 +123,8 @@ class VU1ConfigEntityBase(CoordinatorEntity):
     async def _apply_easing_config_to_server(
         self, 
         easing_type: str, 
-        new_period: Optional[int] = None, 
-        new_step: Optional[int] = None
+        new_period: int | None = None,
+        new_step: int | None = None
     ) -> None:
         """Apply easing configuration to server with specific new values.
         
@@ -173,7 +181,7 @@ class VU1ConfigEntityBase(CoordinatorEntity):
 class VU1ValueMinNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for minimum value."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the value min number."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_value_min"
@@ -217,7 +225,7 @@ class VU1ValueMinNumber(VU1ConfigEntityBase, NumberEntity):
 class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for maximum value."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the value max number."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_value_max"
@@ -261,7 +269,7 @@ class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
 class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for dial easing period."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the dial easing period number."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_dial_easing_period"
@@ -309,7 +317,7 @@ class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
 class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for dial easing step."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the dial easing step number."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_dial_easing_step"
@@ -357,7 +365,7 @@ class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
 class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for backlight easing period."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the backlight easing period number."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_backlight_easing_period"
@@ -404,7 +412,7 @@ class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
 class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
     """Number entity for backlight easing step."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the backlight easing step number."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_backlight_easing_step"
@@ -451,7 +459,7 @@ class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
 class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
     """Sensor showing current update mode."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the update mode sensor."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_update_mode_status"
@@ -462,7 +470,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
 
     # Config change listeners inherited from base class
 
-    async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
+    async def _on_config_change(self, dial_uid: str, config: dict[str, Any]) -> None:
         """Handle configuration changes."""
         if dial_uid == self._dial_uid:
             # Trigger immediate state update
@@ -483,7 +491,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         return config.get("update_mode", "manual").title()
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         if not self.hass:
             return {}
@@ -506,7 +514,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
 class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
     """Sensor showing currently bound entity."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the bound entity sensor."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_bound_entity_status"
@@ -517,7 +525,7 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
 
     # Config change listeners inherited from base class
 
-    async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
+    async def _on_config_change(self, dial_uid: str, config: dict[str, Any]) -> None:
         """Handle configuration changes."""
         if dial_uid == self._dial_uid:
             # Trigger immediate state update
@@ -553,7 +561,7 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         return bound_entity
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         if not self.hass:
             return {}

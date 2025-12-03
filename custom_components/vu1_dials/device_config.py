@@ -25,6 +25,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = ["VU1DialConfigManager", "async_get_config_manager"]
+
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}_dial_configs"
 
