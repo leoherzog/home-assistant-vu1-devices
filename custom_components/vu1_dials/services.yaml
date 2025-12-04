@@ -98,8 +98,6 @@ set_dial_image:
       required: true
       selector:
         media:
-          filter:
-            - image
 
 reload_dial:
   name: Reload Dial
