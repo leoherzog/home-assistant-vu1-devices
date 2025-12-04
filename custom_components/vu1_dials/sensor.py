@@ -163,7 +163,7 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
 class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
     """Base class for VU1 diagnostic sensors."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any], attr_name: str, sensor_name: str) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any], attr_name: str, sensor_name: str) -> None:
         """Initialize the diagnostic sensor."""
         super().__init__(coordinator)
         self._dial_uid = dial_uid
@@ -207,7 +207,7 @@ class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
 class VU1FirmwareVersionSensor(VU1DiagnosticSensorBase):
     """Sensor for firmware version."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the firmware version sensor."""
         super().__init__(coordinator, dial_uid, dial_data, "fw_version", "Firmware version")
         self._attr_icon = "mdi:chip"
@@ -216,7 +216,7 @@ class VU1FirmwareVersionSensor(VU1DiagnosticSensorBase):
 class VU1HardwareVersionSensor(VU1DiagnosticSensorBase):
     """Sensor for hardware version."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the hardware version sensor."""
         super().__init__(coordinator, dial_uid, dial_data, "hw_version", "Hardware version")
         self._attr_icon = "mdi:developer-board"
@@ -225,7 +225,7 @@ class VU1HardwareVersionSensor(VU1DiagnosticSensorBase):
 class VU1ProtocolVersionSensor(VU1DiagnosticSensorBase):
     """Sensor for protocol version."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the protocol version sensor."""
         super().__init__(coordinator, dial_uid, dial_data, "protocol_version", "Protocol version")
         self._attr_icon = "mdi:api"
@@ -234,7 +234,7 @@ class VU1ProtocolVersionSensor(VU1DiagnosticSensorBase):
 class VU1FirmwareHashSensor(VU1DiagnosticSensorBase):
     """Sensor for firmware hash."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the firmware hash sensor."""
         super().__init__(coordinator, dial_uid, dial_data, "fw_hash", "Firmware hash")
         self._attr_icon = "mdi:fingerprint"

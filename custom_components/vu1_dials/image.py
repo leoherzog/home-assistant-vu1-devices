@@ -1,7 +1,7 @@
 """Support for VU1 dial image entities."""
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
@@ -41,7 +41,7 @@ async def async_setup_entry(
 class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
     """Image entity showing the current background image of a VU1 dial."""
 
-    def __init__(self, hass: HomeAssistant, coordinator, client: VU1APIClient, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, hass: HomeAssistant, coordinator, client: VU1APIClient, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the dial background image entity."""
         CoordinatorEntity.__init__(self, coordinator)
         ImageEntity.__init__(self, hass)
@@ -53,12 +53,12 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         self._attr_icon = "mdi:image"
         # Set device class to indicate this is an image-related entity
         self._attr_device_class = "image"
-        self._cached_image: Optional[bytes] = None
-        self._last_image_file: Optional[str] = None
-        self._image_last_updated: Optional[datetime] = None
+        self._cached_image: bytes | None = None
+        self._last_image_file: str | None = None
+        self._image_last_updated: datetime | None = None
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> dict[str, Any]:
         """Return device information."""
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
@@ -78,7 +78,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
             and self._dial_uid in self.coordinator.data.get("dials", {})
         )
 
-    async def async_image(self) -> Optional[bytes]:
+    async def async_image(self) -> bytes | None:
         """Return the current dial background image."""
         try:
             # Check if we need to fetch a new image
@@ -114,7 +114,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
             _LOGGER.error("Failed to fetch image for dial %s: %s", self._dial_uid, err)
             return None
 
-    def _get_current_image_file(self) -> Optional[str]:
+    def _get_current_image_file(self) -> str | None:
         """Get the current image file path from coordinator data."""
         if not self.coordinator.data:
             return None
@@ -140,7 +140,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         return "image/png"
 
     @property
-    def state_attributes(self) -> Dict[str, Any]:
+    def state_attributes(self) -> dict[str, Any]:
         """Return state attributes."""
         attributes = super().state_attributes or {}
         
@@ -166,7 +166,7 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         return attributes
 
     @property
-    def image_last_updated(self) -> Optional[datetime]:
+    def image_last_updated(self) -> datetime | None:
         """Return when the image was last updated."""
         return self._image_last_updated
 

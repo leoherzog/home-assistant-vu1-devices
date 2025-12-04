@@ -1,7 +1,7 @@
 """Support for VU1 dial backlight light entities."""
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional, List, Tuple
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.light import (
     LightEntity,
@@ -53,7 +53,7 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         coordinator,
         client: VU1APIClient,
         dial_uid: str,
-        dial_data: Dict[str, Any],
+        dial_data: dict[str, Any],
     ) -> None:
         """Initialize the backlight light entity."""
         super().__init__(coordinator)
@@ -69,7 +69,7 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         self._attr_color_mode = ColorMode.RGB
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> dict[str, Any]:
         """Return device information."""
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
@@ -91,7 +91,7 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         return any(backlight.get(color, 0) > 0 for color in ["red", "green", "blue"])
 
     @property
-    def brightness(self) -> Optional[int]:
+    def brightness(self) -> int | None:
         """Return the brightness of this light between 0..255."""
         backlight = self._get_backlight_from_coordinator()
         if not backlight:
@@ -102,7 +102,7 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         return round((max_component / 100) * 255)
 
     @property
-    def rgb_color(self) -> Optional[Tuple[int, int, int]]:
+    def rgb_color(self) -> tuple[int, int, int] | None:
         """Return the RGB color value."""
         backlight = self._get_backlight_from_coordinator()
         if not backlight:
@@ -190,7 +190,7 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
             _LOGGER.error("Failed to turn off backlight for %s: %s", self._dial_uid, err)
             raise
 
-    def _get_backlight_from_coordinator(self) -> Optional[Dict[str, int]]:
+    def _get_backlight_from_coordinator(self) -> dict[str, int] | None:
         """Get current backlight state from coordinator data."""
         if not self.coordinator.data:
             return None

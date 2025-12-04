@@ -1,7 +1,7 @@
 """Support for VU1 dial button entities."""
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
@@ -54,7 +54,7 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:plus-circle"
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> dict[str, Any]:
         """Return device information for the VU1 server."""
         return {
             "identifiers": {(DOMAIN, self.coordinator.server_device_identifier)},
@@ -88,7 +88,7 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
 class VU1RefreshHardwareInfoButton(CoordinatorEntity, ButtonEntity):
     """Button to refresh hardware information for a VU1 dial."""
 
-    def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the refresh button."""
         super().__init__(coordinator)
         self._client = client
@@ -100,7 +100,7 @@ class VU1RefreshHardwareInfoButton(CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:refresh"
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> dict[str, Any]:
         """Return device information."""
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
@@ -141,7 +141,7 @@ class VU1RefreshHardwareInfoButton(CoordinatorEntity, ButtonEntity):
 class VU1IdentifyDialButton(CoordinatorEntity, ButtonEntity):
     """Button to identify a VU1 dial with white flash animation."""
 
-    def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the identify button."""
         super().__init__(coordinator)
         self._client = client
@@ -153,7 +153,7 @@ class VU1IdentifyDialButton(CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:lightbulb-on"
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> dict[str, Any]:
         """Return device information."""
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})

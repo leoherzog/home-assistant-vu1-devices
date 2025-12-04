@@ -1,6 +1,6 @@
 """Device configuration support for VU1 dials."""
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -39,9 +39,9 @@ class VU1DialConfigManager:
         self.hass = hass
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         # In-memory cache of dial configurations: dial_uid -> config_dict
-        self._configs: Dict[str, Dict[str, Any]] = {}
+        self._configs: dict[str, dict[str, Any]] = {}
         # Event listeners for config changes: dial_uid -> [listener_functions]
-        self._listeners: Dict[str, list] = {}
+        self._listeners: dict[str, list] = {}
 
     async def async_load(self) -> None:
         """Load configurations from storage."""
@@ -53,12 +53,12 @@ class VU1DialConfigManager:
         """Save configurations to storage."""
         await self._store.async_save({"dial_configs": self._configs})
 
-    def get_dial_config(self, dial_uid: str) -> Dict[str, Any]:
+    def get_dial_config(self, dial_uid: str) -> dict[str, Any]:
         """Get configuration for a dial."""
         return self._configs.get(dial_uid, self._get_default_config())
 
     async def async_update_dial_config(
-        self, dial_uid: str, config: Dict[str, Any]
+        self, dial_uid: str, config: dict[str, Any]
     ) -> None:
         """Update configuration for a dial."""
         # Get the existing configuration (includes defaults)
@@ -77,7 +77,7 @@ class VU1DialConfigManager:
         # Notify listeners (entities, binding manager) of changes
         await self._notify_listeners(dial_uid, validated_config)
 
-    def _get_default_config(self) -> Dict[str, Any]:
+    def _get_default_config(self) -> dict[str, Any]:
         """Get default dial configuration."""
         return {
             CONF_BOUND_ENTITY: None,
@@ -93,7 +93,7 @@ class VU1DialConfigManager:
             "backlight_easing_step": 5,
         }
 
-    def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Validate and sanitize dial configuration."""
         # Create a copy to operate on, preserving the original
         validated = config.copy()
@@ -164,7 +164,7 @@ class VU1DialConfigManager:
             if not self._listeners[dial_uid]:
                 del self._listeners[dial_uid]
 
-    async def _notify_listeners(self, dial_uid: str, config: Dict[str, Any]) -> None:
+    async def _notify_listeners(self, dial_uid: str, config: dict[str, Any]) -> None:
         """Notify listeners of configuration changes."""
         if dial_uid in self._listeners:
             for listener in self._listeners[dial_uid]:

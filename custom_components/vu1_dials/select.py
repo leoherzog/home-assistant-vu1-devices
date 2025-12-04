@@ -1,6 +1,6 @@
 """Support for VU1 dial behavior preset select entities."""
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -71,7 +71,7 @@ async def async_setup_entry(
 class VU1BehaviorSelect(CoordinatorEntity, SelectEntity):
     """Select entity for dial behavior presets."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: Dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the behavior select entity."""
         super().__init__(coordinator)
         self._dial_uid = dial_uid
@@ -83,7 +83,7 @@ class VU1BehaviorSelect(CoordinatorEntity, SelectEntity):
         self._attr_options = [preset["name"] for preset in BEHAVIOR_PRESETS.values()]
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> dict[str, Any]:
         """Return device information."""
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
@@ -165,7 +165,7 @@ class VU1BehaviorSelect(CoordinatorEntity, SelectEntity):
         
         _LOGGER.info("Applied %s behavior preset to dial %s", option, self._dial_uid)
 
-    async def _apply_easing_config(self, preset_config: Dict[str, Any]) -> None:
+    async def _apply_easing_config(self, preset_config: dict[str, Any]) -> None:
         """Apply easing configuration to server."""
         from . import _get_dial_client_and_coordinator
         result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
@@ -203,14 +203,14 @@ class VU1BehaviorSelect(CoordinatorEntity, SelectEntity):
         config_manager = async_get_config_manager(self.hass)
         config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
 
-    async def _on_config_change(self, dial_uid: str, config: Dict[str, Any]) -> None:
+    async def _on_config_change(self, dial_uid: str, config: dict[str, Any]) -> None:
         """Handle configuration changes."""
         if dial_uid == self._dial_uid:
             # Trigger immediate state update to check for preset match
             self.async_schedule_update_ha_state()
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         config_manager = async_get_config_manager(self.hass)
         config = config_manager.get_dial_config(self._dial_uid)
