@@ -9,7 +9,6 @@ from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
-from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 
 from .const import DOMAIN
 from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
@@ -28,7 +27,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize config flow."""
         self._discovered_host: str | None = None
         self._discovered_port: int | None = None
-        self._discovered_api_key: str | None = None
         self._discovery_method: str | None = None
         self._discovered_ingress: bool = False
         self._discovered_slug: str | None = None
@@ -183,92 +181,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "info": f"Enter the API key for the VU1 Server Add-on ({self._addon_name or 'Unknown'})."
             }
-        )
-
-    async def async_step_hassio(
-        self, discovery_info: HassioServiceInfo
-    ) -> ConfigFlowResult:
-        """Handle discovery from VU-Server add-on."""
-        self._discovered_host = discovery_info.config.get("host")
-        self._discovered_port = discovery_info.config.get("port", 5340)
-        self._discovered_api_key = discovery_info.config.get("api_key")
-
-        # Try to detect addon for ingress support
-        addon_info = await discover_vu1_addon()
-        if addon_info and addon_info.get("addon_discovered"):
-            # Check if discovered host matches addon IP
-            addon_ip = addon_info.get("addon_ip") or addon_info.get("host")
-            if addon_ip == self._discovered_host:
-                self._discovered_ingress = addon_info.get("ingress", False)
-                self._discovered_slug = addon_info.get("slug")
-                self._supervisor_token = addon_info.get("supervisor_token")
-                addon_slug = addon_info.get("slug", "")
-                self._addon_name = addon_slug.split("_")[-1] if "_" in addon_slug else addon_slug
-
-        # Set unique ID based on connection type (consistent with manual addon flow)
-        if self._discovered_ingress:
-            await self.async_set_unique_id(f"vu1_server_ingress_{self._discovered_slug}")
-        else:
-            await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
-        self._abort_if_unique_id_configured()
-
-        return await self.async_step_hassio_confirm()
-
-    async def async_step_hassio_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Confirm setup with the user."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            # Build config with discovered values and user-confirmed API key
-            config_data = {
-                "host": self._discovered_host,
-                "port": self._discovered_port,
-                "api_key": user_input["api_key"],
-            }
-
-            # Add ingress configuration if detected
-            if self._discovered_ingress:
-                config_data.update({
-                    "ingress": True,
-                    "ingress_slug": self._discovered_slug,
-                    "supervisor_token": self._supervisor_token,
-                })
-
-            try:
-                await validate_input(self.hass, config_data)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except Exception:
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
-            else:
-                # Use appropriate title based on connection type
-                if self._discovered_ingress:
-                    title = f"VU1 Server Add-on ({self._addon_name or 'Unknown'})"
-                else:
-                    title = "VU1 Server (Add-on)"
-                return self.async_create_entry(
-                    title=title,
-                    data=config_data,
-                )
-
-        # Show form with required API key field
-        schema = vol.Schema({
-            vol.Required("api_key", default=self._discovered_api_key or ""): cv.string,
-        })
-
-        return self.async_show_form(
-            step_id="hassio_confirm",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={
-                "host": self._discovered_host,
-                "port": str(self._discovered_port),
-            },
         )
 
     async def async_step_reconfigure(
