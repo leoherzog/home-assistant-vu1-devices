@@ -23,6 +23,15 @@
         "data": {
           "api_key": "API Key"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure VU1 Server",
+        "description": "{info}",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "api_key": "API Key"
+        }
       }
     },
     "error": {

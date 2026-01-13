@@ -3,7 +3,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -21,7 +20,7 @@ from .config_entities import (
 )
 
 if TYPE_CHECKING:
-    from . import VU1DataUpdateCoordinator
+    from . import VU1ConfigEntry, VU1DataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,13 +29,12 @@ __all__ = ["async_setup_entry"]
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: VU1ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up VU1 number entities."""
-    data = hass.data[DOMAIN][config_entry.entry_id]
-    coordinator = data["coordinator"]
-    client: VU1APIClient = data["client"]
+    coordinator = config_entry.runtime_data.coordinator
+    client = config_entry.runtime_data.client
 
     entities = []
     

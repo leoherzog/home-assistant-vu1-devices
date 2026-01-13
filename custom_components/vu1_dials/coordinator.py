@@ -10,7 +10,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .vu1_api import VU1APIClient, VU1APIError
+from .vu1_api import VU1APIClient, VU1APIError, VU1ConnectionError, VU1AuthError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +48,26 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         self._new_dial_callbacks: list[Any] = []
         # Track known dial UIDs for detecting new dials
         self._known_dial_uids: set[str] = set()
+
+    async def _async_setup(self) -> None:
+        """Perform one-time setup during first refresh.
+
+        This method is called during async_config_entry_first_refresh()
+        with proper error handling (ConfigEntryNotReady on failure).
+        """
+        # Verify initial connection is healthy
+        connection_result = await self.client.test_connection()
+        if not connection_result["connected"]:
+            raise UpdateFailed(
+                f"Cannot connect to VU1 server: {connection_result.get('error', 'Unknown')}"
+            )
+
+        if not connection_result["authenticated"]:
+            raise UpdateFailed(
+                f"Authentication failed: {connection_result.get('error', 'Invalid API key')}"
+            )
+
+        _LOGGER.debug("Coordinator initial setup completed successfully")
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from VU1 server."""
@@ -99,9 +119,24 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 
             return {"dials": dial_data}
 
+        except VU1AuthError as err:
+            # Auth errors - longer delay to avoid hammering with bad credentials
+            _LOGGER.error("VU1 authentication error: %s", err)
+            raise UpdateFailed(
+                f"Authentication error: {err}",
+                retry_after=300,  # 5 minutes
+            ) from err
+        except VU1ConnectionError as err:
+            # Connection errors - standard retry (no retry_after)
+            _LOGGER.error("VU1 connection error: %s", err)
+            raise UpdateFailed(f"Connection error: {err}") from err
         except VU1APIError as err:
+            # API errors - moderate backoff
             _LOGGER.error("VU1 API error: %s", err)
-            raise UpdateFailed(f"Error communicating with VU1 server: {err}") from err
+            raise UpdateFailed(
+                f"API error: {err}",
+                retry_after=60,  # 1 minute
+            ) from err
         except Exception as err:
             _LOGGER.exception("Unexpected error updating VU1 data")
             raise UpdateFailed(f"Unexpected error: {err}") from err

@@ -3,7 +3,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -11,11 +10,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, get_dial_device_info
-from .vu1_api import VU1APIClient
 from .config_entities import VU1UpdateModeSensor, VU1BoundEntitySensor
 
 if TYPE_CHECKING:
-    from . import VU1DataUpdateCoordinator
+    from . import VU1ConfigEntry, VU1DataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,19 +22,17 @@ __all__ = ["async_setup_entry"]
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: VU1ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up VU1 sensor entities."""
-    data = hass.data[DOMAIN][config_entry.entry_id]
-    coordinator = data["coordinator"]
-    client: VU1APIClient = data["client"]
+    coordinator = config_entry.runtime_data.coordinator
 
     entities = []
-    
+
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
-        entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_info))
+        entities.append(VU1DialSensor(coordinator, dial_uid, dial_info))
         
         entities.extend([
             VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
@@ -58,7 +54,7 @@ async def async_setup_entry(
         new_entities = []
         for dial_uid, dial_info in new_dials.items():
             _LOGGER.info("Creating sensor entities for new dial %s", dial_uid)
-            new_entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_info))
+            new_entities.append(VU1DialSensor(coordinator, dial_uid, dial_info))
             new_entities.extend([
                 VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
                 VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
@@ -80,13 +76,11 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     def __init__(
         self,
         coordinator,
-        client: VU1APIClient,
         dial_uid: str,
         dial_data: dict[str, Any],
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{DOMAIN}_{dial_uid}"
         self._attr_name = dial_data.get("dial_name", f"VU1 Dial {dial_uid}")

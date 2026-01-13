@@ -2,7 +2,7 @@
   "domain": "vu1_dials",
   "name": "Streacom VU1 Dials",
   "version": "0.0.1",
-  "homeassistant": "2023.3.0",
+  "homeassistant": "2025.12.0",
   "documentation": "https://github.com/leoherzog/home-assistant-vu1-devices",
   "issue_tracker": "https://github.com/leoherzog/home-assistant-vu1-devices/issues",
   "dependencies": [],

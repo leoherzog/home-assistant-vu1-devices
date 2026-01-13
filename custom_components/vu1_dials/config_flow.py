@@ -5,7 +5,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
@@ -36,7 +36,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step - show connection type selection."""
         errors: dict[str, str] = {}
 
@@ -91,7 +91,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle manual configuration."""
         errors: dict[str, str] = {}
 
@@ -129,7 +129,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_addon(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle add-on configuration."""
         errors: dict[str, str] = {}
 
@@ -183,39 +183,98 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle reconfiguration of the integration."""
+        errors: dict[str, str] = {}
+        entry = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            # Build updated configuration
+            updated_data = dict(entry.data)
+
+            # Only update fields that were provided
+            if "host" in user_input:
+                updated_data["host"] = user_input["host"]
+            if "port" in user_input:
+                updated_data["port"] = user_input["port"]
+            if "api_key" in user_input:
+                updated_data["api_key"] = user_input["api_key"]
+
+            try:
+                await validate_input(self.hass, updated_data)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected exception during reconfigure")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates=updated_data,
+                )
+
+        # Determine current values for defaults
+        is_ingress = entry.data.get("ingress", False)
+
+        if is_ingress:
+            # For ingress connections, only allow API key change
+            schema = vol.Schema({
+                vol.Required("api_key", default=entry.data.get("api_key", "")): cv.string,
+            })
+        else:
+            # For direct connections, allow host/port/api_key changes
+            schema = vol.Schema({
+                vol.Required("host", default=entry.data.get("host", "localhost")): cv.string,
+                vol.Required("port", default=entry.data.get("port", 5340)): cv.port,
+                vol.Required("api_key", default=entry.data.get("api_key", "")): cv.string,
+            })
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "info": "Update connection settings for your VU1 Server."
+            }
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return OptionsFlowHandler(config_entry)
+        return OptionsFlowHandler()
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+    def __init__(self) -> None:
         """Initialize options flow."""
-        self._dials = []
-        self._selected_dial = None
-        self._dial_config_data = {}
+        self._dials: list[dict[str, str]] = []
+        self._selected_dial: str | None = None
+        self._dial_config_data: dict[str, Any] = {}
         # Store options collected during the flow to preserve update_interval
         self._collected_options: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Manage the options."""
         errors: dict[str, str] = {}
         
         try:
-            coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+            coordinator = self.config_entry.runtime_data.coordinator
             if coordinator.data:
                 dials_data = coordinator.data.get("dials", {})
                 self._dials = [
                     {
-                        "value": dial_uid, 
+                        "value": dial_uid,
                         "label": f"{dial_data.get('dial_name', f'VU1 Dial {dial_uid}')} ({dial_uid})"
                     }
                     for dial_uid, dial_data in dials_data.items()
@@ -260,7 +319,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_configure_dial(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Configure specific dial with proper entity selector."""
         errors: dict[str, str] = {}
         
@@ -282,14 +341,14 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             else:
                 return await self.async_step_configure_manual()
 
-        coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+        coordinator = self.config_entry.runtime_data.coordinator
         dials_data = coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._selected_dial, {})
         dial_name = dial_data.get("dial_name", self._selected_dial)
 
         schema = vol.Schema({
             vol.Required(
-                "update_mode", 
+                "update_mode",
                 default=current_config.get("update_mode", "manual")
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -313,7 +372,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_configure_automatic(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Configure automatic mode with sensor binding."""
         errors: dict[str, str] = {}
         
@@ -358,7 +417,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     _LOGGER.error("Failed to update dial configuration: %s", err)
                     errors["base"] = "config_update_failed"
 
-        coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+        coordinator = self.config_entry.runtime_data.coordinator
         dials_data = coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._selected_dial, {})
         dial_name = dial_data.get("dial_name", self._selected_dial)
@@ -395,7 +454,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_configure_manual(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Configure manual mode (just saves the mode)."""
         if not self._selected_dial:
             return await self.async_step_init()

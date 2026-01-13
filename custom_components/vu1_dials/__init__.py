@@ -1,19 +1,24 @@
 """The VU1 Dials integration."""
+from __future__ import annotations
+
 import logging
 import mimetypes
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback, Event
-from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import EVENT_DEVICE_REGISTRY_UPDATED, EventDeviceRegistryUpdatedData
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+
+if TYPE_CHECKING:
+    from .sensor_binding import VU1SensorBindingManager
 
 from .const import (
     DOMAIN,
@@ -38,7 +43,7 @@ from .const import (
     ATTR_MEDIA_CONTENT_ID,
 )
 from .coordinator import VU1DataUpdateCoordinator
-from .vu1_api import VU1APIClient, VU1APIError, VU1ConnectionError, VU1AuthError
+from .vu1_api import VU1APIClient, VU1APIError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +52,21 @@ __all__ = [
     "async_setup_entry",
     "async_unload_entry",
     "VU1DataUpdateCoordinator",
+    "VU1RuntimeData",
+    "VU1ConfigEntry",
 ]
+
+
+@dataclass
+class VU1RuntimeData:
+    """Runtime data for VU1 Dials integration."""
+
+    client: VU1APIClient
+    coordinator: VU1DataUpdateCoordinator
+    binding_manager: VU1SensorBindingManager
+
+
+type VU1ConfigEntry = ConfigEntry[VU1RuntimeData]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -56,7 +75,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     """Set up VU1 Dials from a config entry."""
     api_key = entry.data[CONF_API_KEY]
     timeout = entry.options.get("timeout", DEFAULT_TIMEOUT)
@@ -82,24 +101,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         connection_info = f"{host}:{port}"
         device_identifier = f"vu1_server_{host}_{port}"
 
-    try:
-        connection_result = await client.test_connection()
-        if not connection_result["connected"]:
-            error_msg = connection_result["error"] or "Unknown connection error"
-            raise ConfigEntryNotReady(f"Cannot connect to VU1 server: {error_msg}")
-
-        # Log authentication status for debugging
-        if connection_result["authenticated"]:
-            _LOGGER.debug("VU1 server connection successful with valid API key")
-        else:
-            _LOGGER.warning("VU1 server reachable but API key validation failed: %s",
-                          connection_result["error"])
-    except VU1ConnectionError as err:
-        raise ConfigEntryNotReady(f"Cannot connect to VU1 server: {err}") from err
-    except VU1AuthError as err:
-        raise ConfigEntryNotReady(f"Authentication failed with VU1 server: {err}") from err
-    except VU1APIError as err:
-        raise ConfigEntryNotReady(f"Failed to communicate with VU1 server: {err}") from err
+    # Connection validation is handled by coordinator._async_setup during first refresh
+    # which automatically raises ConfigEntryNotReady on failure
 
     update_interval = timedelta(
         seconds=entry.options.get("update_interval", DEFAULT_UPDATE_INTERVAL)
@@ -150,20 +153,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         initial_dial_uids = set(coordinator.data.get("dials", {}).keys())
         coordinator.update_known_dials(initial_dial_uids)
 
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
-        "client": client,
-        "coordinator": coordinator,
-        "binding_manager": binding_manager,
-    }
-    
+    # Store runtime data on the config entry (modern HA 2024.5+ pattern)
+    entry.runtime_data = VU1RuntimeData(
+        client=client,
+        coordinator=coordinator,
+        binding_manager=binding_manager,
+    )
+
     # Set up device registry listener for bidirectional name sync
     @callback
     def handle_device_registry_updated(event: Event[EventDeviceRegistryUpdatedData]) -> None:
         """Handle device registry updates."""
+        # Only process update events (not create/remove which don't have changes)
+        if event.data.get("action") != "update":
+            return
+
         device_id = event.data["device_id"]
-        changes = event.data["changes"]
-        
+        changes = event.data.get("changes", {})
+
         if "name_by_user" not in changes:
             return
             
@@ -199,31 +206,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
-        data = hass.data[DOMAIN].pop(entry.entry_id)
-        client = data["client"]
-        coordinator = data["coordinator"]
-        binding_manager = data.get("binding_manager")
+        runtime_data = entry.runtime_data
 
-        await client.close()
+        await runtime_data.client.close()
 
-        if binding_manager:
-            await binding_manager.async_shutdown()
+        if runtime_data.binding_manager:
+            await runtime_data.binding_manager.async_shutdown()
 
         # Clean up server device from device registry
         device_registry = dr.async_get(hass)
         device = device_registry.async_get_device(
-            identifiers={(DOMAIN, coordinator.server_device_identifier)}
+            identifiers={(DOMAIN, runtime_data.coordinator.server_device_identifier)}
         )
         if device:
             device_registry.async_remove_device(device.id)
 
         # Unregister services and clean up shared managers if this is the last config entry
-        if not hass.data[DOMAIN]:
+        remaining_entries = hass.config_entries.async_entries(DOMAIN)
+        if len(remaining_entries) <= 1:  # Only this entry being unloaded remains
             async_unload_services(hass)
             # Clean up shared managers to prevent memory leaks
             hass.data.pop(f"{DOMAIN}_config_manager", None)
@@ -244,10 +249,12 @@ def async_unload_services(hass: HomeAssistant) -> None:
 
 def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tuple[VU1APIClient, VU1DataUpdateCoordinator] | None:
     """Find the correct client and coordinator for a dial."""
-    for data in hass.data[DOMAIN].values():
-        coord = data["coordinator"]
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+            continue
+        coord = entry.runtime_data.coordinator
         if coord.data and dial_uid in coord.data.get("dials", {}):
-            return data["client"], coord
+            return entry.runtime_data.client, coord
     return None
 
 

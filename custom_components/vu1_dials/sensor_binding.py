@@ -295,41 +295,38 @@ class VU1SensorBindingManager:
 
     def _get_client_for_dial(self, dial_uid: str) -> VU1APIClient | None:
         """Get VU1 API client for a specific dial."""
-        # Check if integration domain data exists yet
-        if DOMAIN not in self.hass.data:
-            return None
-            
-        # Find the config entry that contains this dial UID
-        for entry_id, data in self.hass.data[DOMAIN].items():
-            if isinstance(data, dict) and "coordinator" in data:
-                coordinator = data["coordinator"]
-                if coordinator.data and dial_uid in coordinator.data.get("dials", {}):
-                    return data["client"]
+        # Find the config entry that contains this dial UID using runtime_data
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+                continue
+            coordinator = entry.runtime_data.coordinator
+            if coordinator.data and dial_uid in coordinator.data.get("dials", {}):
+                return entry.runtime_data.client
         return None
 
     async def async_reconfigure_dial_binding(self, dial_uid: str) -> None:
         """Reconfigure binding for a specific dial after configuration changes.
-        
+
         This is the public method that should be called when a dial's configuration
         has been updated and the binding needs to be refreshed.
         """
         # Get the updated configuration
         config = self._config_manager.get_dial_config(dial_uid)
-        
-        # Find the dial data from the coordinator
+
+        # Find the dial data from the coordinator using runtime_data
         dial_data = None
-        if DOMAIN in self.hass.data:
-            for entry_id, data in self.hass.data[DOMAIN].items():
-                if isinstance(data, dict) and "coordinator" in data:
-                    coordinator = data["coordinator"]
-                    if coordinator.data and dial_uid in coordinator.data.get("dials", {}):
-                        dial_data = coordinator.data["dials"][dial_uid]
-                        break
-        
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+                continue
+            coordinator = entry.runtime_data.coordinator
+            if coordinator.data and dial_uid in coordinator.data.get("dials", {}):
+                dial_data = coordinator.data["dials"][dial_uid]
+                break
+
         if dial_data is None:
             _LOGGER.warning("Could not find dial data for %s during reconfiguration", dial_uid)
             return
-        
+
         # Update the binding using our private method
         await self._update_binding(dial_uid, config, dial_data)
         _LOGGER.info("Reconfigured binding for dial %s", dial_uid)

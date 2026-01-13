@@ -1,10 +1,11 @@
 """Support for VU1 dial button entities."""
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -14,6 +15,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, get_dial_device_info
 from .vu1_api import VU1APIClient
 
+if TYPE_CHECKING:
+    from . import VU1ConfigEntry
+
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["async_setup_entry"]
@@ -21,13 +25,12 @@ __all__ = ["async_setup_entry"]
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: VU1ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up VU1 button entities."""
-    data = hass.data[DOMAIN][config_entry.entry_id]
-    coordinator = data["coordinator"]
-    client: VU1APIClient = data["client"]
+    coordinator = config_entry.runtime_data.coordinator
+    client = config_entry.runtime_data.client
 
     entities = []
 
@@ -173,7 +176,7 @@ class VU1IdentifyDialButton(CoordinatorEntity, ButtonEntity):
         self._attr_unique_id = f"{dial_uid}_identify"
         self._attr_name = "Identify"
         self._attr_has_entity_name = True
-        self._attr_entity_category = EntityCategory.CONFIG
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_icon = "mdi:lightbulb-on"
 
     @property

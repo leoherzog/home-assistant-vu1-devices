@@ -1,9 +1,10 @@
 """Support for VU1 dial behavior preset select entities."""
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -12,6 +13,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, get_dial_device_info
 from .device_config import async_get_config_manager
+
+if TYPE_CHECKING:
+    from . import VU1ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,12 +56,11 @@ BEHAVIOR_PRESETS = {
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: VU1ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up VU1 select entities."""
-    data = hass.data[DOMAIN][config_entry.entry_id]
-    coordinator = data["coordinator"]
+    coordinator = config_entry.runtime_data.coordinator
 
     entities = []
     

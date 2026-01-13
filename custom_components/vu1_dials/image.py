@@ -1,10 +1,11 @@
 """Support for VU1 dial image entities."""
+from __future__ import annotations
+
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.image import ImageEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -14,6 +15,9 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN, get_dial_device_info
 from .vu1_api import VU1APIClient
 
+if TYPE_CHECKING:
+    from . import VU1ConfigEntry
+
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["async_setup_entry"]
@@ -21,13 +25,12 @@ __all__ = ["async_setup_entry"]
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: VU1ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up VU1 image entities."""
-    data = hass.data[DOMAIN][config_entry.entry_id]
-    coordinator = data["coordinator"]
-    client: VU1APIClient = data["client"]
+    coordinator = config_entry.runtime_data.coordinator
+    client = config_entry.runtime_data.client
 
     entities = []
     
