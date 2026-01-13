@@ -32,6 +32,11 @@
           "port": "Port",
           "api_key": "API Key"
         }
+      },
+      "hassio_confirm": {
+        "title": "VU-Server Add-on Discovered",
+        "description": "VU-Server add-on detected at {host}:{port}. Set up VU1 Devices integration?",
+        "data": {}
       }
     },
     "error": {

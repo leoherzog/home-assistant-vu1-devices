@@ -19,12 +19,13 @@ This project is a **Home Assistant Custom Component** that integrates **Streacom
 
 ```
 custom_components/vu1_dials/
-├── __init__.py          # Entry point, service registration, lifecycle management
-├── config_flow.py       # UI config flow and options flow handlers
-├── coordinator.py       # DataUpdateCoordinator for polling and state sync
+├── __init__.py          # Entry point, runtime_data, service registration, lifecycle
+├── config_flow.py       # UI config flow, options flow, and reconfigure flow handlers
+├── coordinator.py       # DataUpdateCoordinator with _async_setup and retry_after
 ├── vu1_api.py           # Async HTTP client for VU1 Server API
 ├── sensor_binding.py    # Automatic sensor-to-dial binding system
 ├── device_config.py     # Persistent storage for dial configurations
+├── diagnostics.py       # Integration diagnostics for debugging
 ├── const.py             # Constants, domain, service names, defaults
 ├── config_entities.py   # Configuration number/sensor entities (easing, range)
 ├── number.py            # Dial value number entity
@@ -36,7 +37,7 @@ custom_components/vu1_dials/
 ├── device_action.py     # Device automation triggers
 ├── services.yaml        # Service definitions for HA UI
 ├── translations/en.json # UI strings for config flow
-└── manifest.json        # Integration metadata
+└── manifest.json        # Integration metadata (requires HA 2025.12+)
 ```
 
 ### Data Flow
@@ -69,6 +70,20 @@ custom_components/vu1_dials/
 ## Core Modules
 
 ### `__init__.py` - Integration Entry Point
+
+**Runtime Data Pattern (HA 2024.5+):**
+```python
+@dataclass
+class VU1RuntimeData:
+    """Runtime data for VU1 Dials integration."""
+    client: VU1APIClient
+    coordinator: VU1DataUpdateCoordinator
+    binding_manager: VU1SensorBindingManager
+
+type VU1ConfigEntry = ConfigEntry[VU1RuntimeData]
+```
+
+Data is stored on the config entry itself via `entry.runtime_data = VU1RuntimeData(...)` instead of the legacy `hass.data[DOMAIN][entry.entry_id]` pattern. Access runtime data via `config_entry.runtime_data.coordinator`, etc.
 
 **Key Functions:**
 - `async_setup()`: Registers domain-wide services (runs once per domain)
@@ -143,6 +158,25 @@ Queries Supervisor API at `http://supervisor/addons` to find VU1 Server add-on.
 **Class: `VU1DataUpdateCoordinator`**
 
 Extends `DataUpdateCoordinator` to poll VU1 server at configured intervals (default 30s).
+
+**One-Time Setup (HA 2024.8+):**
+```python
+async def _async_setup(self) -> None:
+    """Perform one-time setup during first refresh."""
+    connection_result = await self.client.test_connection()
+    if not connection_result["connected"]:
+        raise UpdateFailed(...)  # Converted to ConfigEntryNotReady
+```
+Called automatically during `async_config_entry_first_refresh()`. Failures raise `UpdateFailed` which HA converts to `ConfigEntryNotReady`.
+
+**Retry Backoff (HA 2025.11+):**
+```python
+except VU1AuthError as err:
+    raise UpdateFailed(f"Auth error: {err}", retry_after=300) from err  # 5 min
+except VU1APIError as err:
+    raise UpdateFailed(f"API error: {err}", retry_after=60) from err    # 1 min
+```
+The `retry_after` parameter (float, seconds) defers the next scheduled refresh when API signals backoff conditions.
 
 **Data Structure:**
 ```python
@@ -278,12 +312,26 @@ config_manager.async_remove_listener(dial_uid, callback)
 
 ### `config_flow.py` - Configuration UI
 
+**Type Hints (HA 2024.4+):**
+```python
+from homeassistant.config_entries import ConfigFlowResult  # Not FlowResult!
+```
+
 **Class: `ConfigFlow`**
 
 Multi-step setup:
 1. `async_step_user()` - Choose connection type (add-on or manual)
 2. `async_step_addon()` - Enter API key for discovered add-on
 3. `async_step_manual()` - Enter host, port, API key manually
+4. `async_step_reconfigure()` - Change host/port/API key without removing integration
+
+**Reconfigure Flow (HA 2024.3+):**
+```python
+async def async_step_reconfigure(self, user_input=None) -> ConfigFlowResult:
+    entry = self._get_reconfigure_entry()
+    # ... validate and update
+    return self.async_update_reload_and_abort(entry, data_updates=updated_data)
+```
 
 **Class: `OptionsFlowHandler`**
 
@@ -293,7 +341,36 @@ Multi-step dial configuration:
 3. `async_step_configure_automatic()` - Bind sensor with value range
 4. `async_step_configure_manual()` - Remove binding
 
+**OptionsFlow Pattern (HA 2025.12 breaking change):**
+```python
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    def __init__(self) -> None:  # NO config_entry parameter!
+        ...
+    # Access via self.config_entry property (auto-provided)
+```
+
 Global options (like `update_interval`) are preserved across dial configuration steps via `_collected_options`.
+
+### `diagnostics.py` - Integration Diagnostics
+
+Provides debug information downloadable from Settings > Devices & Services.
+
+```python
+TO_REDACT = {"api_key", "supervisor_token", "ingress_slug"}
+
+async def async_get_config_entry_diagnostics(
+    hass: HomeAssistant, entry: VU1ConfigEntry,
+) -> dict[str, Any]:
+    """Return diagnostics for a config entry."""
+    return {
+        "config_entry": async_redact_data(entry.as_dict(), TO_REDACT),
+        "coordinator": {...},
+        "dials": {...},
+        "bindings": {...},
+    }
+```
+
+Uses `async_redact_data()` from `homeassistant.components.diagnostics` to sanitize sensitive fields.
 
 ---
 
@@ -389,10 +466,11 @@ VU1 Server (hub)
 ## Development Conventions
 
 ### Code Style
-- **Python Version**: 3.10+ (match Home Assistant requirements)
+- **Python Version**: 3.12+ (required by Home Assistant 2025.12+)
 - **Type Hints**: Required for all function signatures
 - **Async**: All I/O must be async. Use `hass.async_add_executor_job()` for blocking calls
 - **Logging**: Use `_LOGGER = logging.getLogger(__name__)`
+- **Type Aliases**: Use PEP 695 syntax: `type VU1ConfigEntry = ConfigEntry[VU1RuntimeData]`
 
 ### Entity Development Pattern
 ```python
@@ -435,17 +513,29 @@ class VU1ExampleEntity(CoordinatorEntity, SensorEntity):
 4. Add UI definition in `services.yaml`
 
 ### Error Handling Pattern
+
+**During Setup (in coordinator._async_setup):**
+```python
+# Raise UpdateFailed - HA converts to ConfigEntryNotReady automatically
+raise UpdateFailed(f"Cannot connect: {err}")
+```
+
+**During Runtime (in services/entities):**
 ```python
 try:
     await client.some_api_call()
     await coordinator.async_request_refresh()
-except VU1ConnectionError as err:
-    raise ConfigEntryNotReady(f"Cannot connect: {err}") from err
-except VU1AuthError as err:
-    raise ConfigEntryNotReady(f"Authentication failed: {err}") from err
 except VU1APIError as err:
     _LOGGER.error("Failed to do thing: %s", err)
     raise HomeAssistantError(f"Failed: {err}") from err
+```
+
+**In Coordinator Update (with retry backoff):**
+```python
+except VU1AuthError as err:
+    raise UpdateFailed(f"Auth error: {err}", retry_after=300) from err
+except VU1APIError as err:
+    raise UpdateFailed(f"API error: {err}", retry_after=60) from err
 ```
 
 ### Configuration Entity Pattern
@@ -505,6 +595,7 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
 ### Testing Checklist
 - [ ] Config flow: Manual connection
 - [ ] Config flow: Add-on discovery
+- [ ] Config flow: Reconfigure (change host/port/API key)
 - [ ] Options flow: Sensor binding
 - [ ] Options flow: update_interval preserved during dial configuration
 - [ ] Entity creation for all platforms
@@ -515,6 +606,8 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
 - [ ] Behavior presets apply correctly
 - [ ] Sensor binding auto-updates dial
 - [ ] Dynamic dial discovery: Provision button creates entities for new dials
+- [ ] Diagnostics: Download from Settings shows redacted sensitive data
+- [ ] Error recovery: retry_after delays work on API errors
 
 ### Debugging Tips
 1. Enable debug logging:
@@ -534,7 +627,8 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
 
 | File | Purpose |
 |------|---------|
-| `manifest.json` | Integration metadata, version, dependencies |
+| `manifest.json` | Integration metadata, version, dependencies (requires HA 2025.12+) |
+| `diagnostics.py` | Debug data export with sensitive field redaction |
 | `services.yaml` | Service definitions for HA UI |
-| `translations/en.json` | UI strings for config/options flow |
+| `translations/en.json` | UI strings for config/options/reconfigure flow |
 | `.storage/vu1_dials_dial_configs` | Persisted dial configurations |

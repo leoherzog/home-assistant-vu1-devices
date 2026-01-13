@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
+from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 
 from .const import DOMAIN
 from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
@@ -27,6 +28,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize config flow."""
         self._discovered_host: str | None = None
         self._discovered_port: int | None = None
+        self._discovered_api_key: str | None = None
         self._discovery_method: str | None = None
         self._discovered_ingress: bool = False
         self._discovered_slug: str | None = None
@@ -181,6 +183,59 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "info": f"Enter the API key for the VU1 Server Add-on ({self._addon_name or 'Unknown'})."
             }
+        )
+
+    async def async_step_hassio(
+        self, discovery_info: HassioServiceInfo
+    ) -> ConfigFlowResult:
+        """Handle discovery from VU-Server add-on."""
+        self._discovered_host = discovery_info.config.get("host")
+        self._discovered_port = discovery_info.config.get("port", 5340)
+        self._discovered_api_key = discovery_info.config.get("api_key")
+
+        # Prevent duplicate entries
+        await self.async_set_unique_id("vu_server_hassio")
+        self._abort_if_unique_id_configured()
+
+        return await self.async_step_hassio_confirm()
+
+    async def async_step_hassio_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm setup with the user."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            # Build config with discovered values
+            config_data = {
+                "host": self._discovered_host,
+                "port": self._discovered_port,
+                "api_key": self._discovered_api_key,
+            }
+
+            try:
+                await validate_input(self.hass, config_data)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
+            else:
+                return self.async_create_entry(
+                    title="VU1 Server (Add-on)",
+                    data=config_data,
+                )
+
+        return self.async_show_form(
+            step_id="hassio_confirm",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={
+                "host": self._discovered_host,
+                "port": str(self._discovered_port),
+            },
         )
 
     async def async_step_reconfigure(

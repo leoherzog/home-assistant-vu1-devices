@@ -9,6 +9,7 @@
   "codeowners": ["@leoherzog"],
   "requirements": [],
   "config_flow": true,
+  "hassio": true,
   "iot_class": "local_polling",
   "integration_type": "device",
   "after_dependencies": ["device_automation"]
