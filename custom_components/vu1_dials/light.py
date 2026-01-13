@@ -10,11 +10,12 @@ from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, get_dial_device_info
 from .device_config import async_get_config_manager
 from .vu1_api import VU1APIClient
 
@@ -44,6 +45,19 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
+    # Register callback for creating entities when new dials are discovered
+    async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
+        """Create light entities for newly discovered dials."""
+        new_entities = []
+        for dial_uid, dial_info in new_dials.items():
+            _LOGGER.info("Creating light entity for new dial %s", dial_uid)
+            new_entities.append(VU1BacklightLight(coordinator, client, dial_uid, dial_info))
+        if new_entities:
+            async_add_entities(new_entities)
+
+    unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
+    config_entry.async_on_unload(unsub)
+
 
 class VU1BacklightLight(CoordinatorEntity, LightEntity):
     """Representation of a VU1 dial backlight light entity."""
@@ -69,17 +83,10 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         self._attr_color_mode = ColorMode.RGB
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information."""
-        dials_data = self.coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._dial_uid, {})
-        return {
-            "identifiers": {(DOMAIN, self._dial_uid)},
-            "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
-            "manufacturer": "Streacom",
-            "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
-        }
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {}) if self.coordinator.data else {}
+        return get_dial_device_info(self._dial_uid, dial_data, self.coordinator.server_device_identifier)
 
     @property
     def is_on(self) -> bool:

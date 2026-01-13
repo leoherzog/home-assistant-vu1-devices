@@ -1,9 +1,8 @@
 """Sensor binding system for VU1 dials."""
-import asyncio
 import functools
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -38,8 +37,9 @@ class VU1SensorBindingManager:
         self.hass = hass
         # Track active bindings: dial_uid -> {entity_id, config, dial_data, client, last_state}
         self._bindings: dict[str, dict[str, Any]] = {}
-        # Track state change listeners: entity_id -> listener function
-        self._listeners: dict[str, Any] = {}
+        # Track state change listeners with reference counting:
+        # entity_id -> {"unsub": unsubscribe_callable, "count": number_of_dials_using_it}
+        self._listeners: dict[str, dict[str, Any]] = {}
         self._config_manager = async_get_config_manager(hass)
         # Debounce API calls to prevent rapid updates: dial_uid -> debouncer
         self._debouncers: dict[str, Debouncer] = {}
@@ -137,10 +137,22 @@ class VU1SensorBindingManager:
             function=functools.partial(self._apply_sensor_value, dial_uid),
         )
 
-        # Set up state change listener
-        self._listeners[entity_id] = async_track_state_change_event(
-            self.hass, [entity_id], self._async_sensor_state_changed
-        )
+        # Set up state change listener with reference counting
+        # Only create a new listener if this is the first dial binding to this entity
+        if entity_id in self._listeners:
+            # Increment reference count for existing listener
+            self._listeners[entity_id]["count"] += 1
+            _LOGGER.debug(
+                "Reusing existing listener for %s (count: %d)",
+                entity_id, self._listeners[entity_id]["count"]
+            )
+        else:
+            # Create new listener for this entity
+            unsub = async_track_state_change_event(
+                self.hass, [entity_id], self._async_sensor_state_changed
+            )
+            self._listeners[entity_id] = {"unsub": unsub, "count": 1}
+            _LOGGER.debug("Created new listener for %s", entity_id)
 
         _LOGGER.info("Created sensor binding: %s -> dial %s", entity_id, dial_uid)
 
@@ -157,10 +169,20 @@ class VU1SensorBindingManager:
         binding_info = self._bindings[dial_uid]
         entity_id = binding_info["entity_id"]
 
-        # Remove state change listener
+        # Decrement reference count for the listener
+        # Only remove the listener when no more dials are using it
         if entity_id in self._listeners:
-            self._listeners[entity_id]()
-            del self._listeners[entity_id]
+            self._listeners[entity_id]["count"] -= 1
+            if self._listeners[entity_id]["count"] <= 0:
+                # Last dial using this entity - unsubscribe and remove
+                self._listeners[entity_id]["unsub"]()
+                del self._listeners[entity_id]
+                _LOGGER.debug("Removed listener for %s (no more dials bound)", entity_id)
+            else:
+                _LOGGER.debug(
+                    "Decremented listener count for %s (count: %d)",
+                    entity_id, self._listeners[entity_id]["count"]
+                )
 
         # Cancel and remove debouncer
         if debouncer := self._debouncers.pop(dial_uid, None):

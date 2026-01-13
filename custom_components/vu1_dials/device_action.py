@@ -26,6 +26,23 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Easing presets matching VU-Server and select.py
+# Maps preset name to {"dial": (period, step), "backlight": (period, step)}
+EASING_PRESETS = {
+    "responsive": {
+        "dial": (50, 20),      # Fast dial response
+        "backlight": (50, 20),  # Fast backlight response
+    },
+    "balanced": {
+        "dial": (50, 5),       # Balanced dial response
+        "backlight": (50, 10),  # Balanced backlight (different from dial)
+    },
+    "smooth": {
+        "dial": (50, 1),       # Smooth dial movement
+        "backlight": (50, 5),   # Smooth backlight (different from dial)
+    },
+}
+
 __all__ = ["async_get_actions", "async_call_action_from_config", "async_get_action_capabilities"]
 
 ACTION_CONFIGURE_DIAL = "configure_dial"
@@ -53,8 +70,8 @@ CONFIGURE_DIAL_ACTION_SCHEMA = vol.All(
                 vol.Length(min=3, max=3),
                 [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
             ),
-            vol.Optional(CONF_DIAL_EASING, default="linear"): cv.string,
-            vol.Optional(CONF_BACKLIGHT_EASING, default="linear"): cv.string,
+            vol.Optional(CONF_DIAL_EASING, default="balanced"): vol.In(list(EASING_PRESETS.keys())),
+            vol.Optional(CONF_BACKLIGHT_EASING, default="balanced"): vol.In(list(EASING_PRESETS.keys())),
             vol.Optional(CONF_UPDATE_MODE, default="manual"): vol.In([UPDATE_MODE_AUTOMATIC, "manual"]),
         }
     ),
@@ -120,8 +137,8 @@ async def async_get_action_capabilities(
                     vol.Length(min=3, max=3),
                     [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
                 ),
-                vol.Optional(CONF_DIAL_EASING): vol.In(["linear", "ease-in", "ease-out", "ease-in-out"]),
-                vol.Optional(CONF_BACKLIGHT_EASING): vol.In(["linear", "ease-in", "ease-out", "ease-in-out"]),
+                vol.Optional(CONF_DIAL_EASING): vol.In(list(EASING_PRESETS.keys())),
+                vol.Optional(CONF_BACKLIGHT_EASING): vol.In(list(EASING_PRESETS.keys())),
                 vol.Optional(CONF_UPDATE_MODE): vol.In([UPDATE_MODE_AUTOMATIC, "manual"]),
             })
         }
@@ -188,19 +205,26 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
             await client.set_dial_backlight(dial_uid, backlight_color[0], backlight_color[1], backlight_color[2])
             _LOGGER.debug("Applied backlight color %s to dial %s", backlight_color, dial_uid)
         
-        # Apply easing settings if specified
-        final_config = config_manager.get_dial_config(dial_uid)
+        # Apply easing settings if specified - use preset values
         if CONF_DIAL_EASING in config:
-            dial_period = final_config.get("dial_easing_period", 50)
-            dial_step = final_config.get("dial_easing_step", 5)
-            await client.set_dial_easing(dial_uid, dial_period, dial_step)
-            _LOGGER.debug("Applied dial easing to dial %s: period=%s, step=%s", dial_uid, dial_period, dial_step)
-        
+            preset_name = config[CONF_DIAL_EASING]
+            if preset_name in EASING_PRESETS:
+                dial_period, dial_step = EASING_PRESETS[preset_name]["dial"]
+                await client.set_dial_easing(dial_uid, dial_period, dial_step)
+                _LOGGER.debug("Applied dial easing preset '%s' to dial %s: period=%s, step=%s",
+                            preset_name, dial_uid, dial_period, dial_step)
+            else:
+                _LOGGER.warning("Unknown dial easing preset: %s", preset_name)
+
         if CONF_BACKLIGHT_EASING in config:
-            backlight_period = final_config.get("backlight_easing_period", 50)
-            backlight_step = final_config.get("backlight_easing_step", 5)
-            await client.set_backlight_easing(dial_uid, backlight_period, backlight_step)
-            _LOGGER.debug("Applied backlight easing to dial %s: period=%s, step=%s", dial_uid, backlight_period, backlight_step)
+            preset_name = config[CONF_BACKLIGHT_EASING]
+            if preset_name in EASING_PRESETS:
+                backlight_period, backlight_step = EASING_PRESETS[preset_name]["backlight"]
+                await client.set_backlight_easing(dial_uid, backlight_period, backlight_step)
+                _LOGGER.debug("Applied backlight easing preset '%s' to dial %s: period=%s, step=%s",
+                            preset_name, dial_uid, backlight_period, backlight_step)
+            else:
+                _LOGGER.warning("Unknown backlight easing preset: %s", preset_name)
         
         # Update sensor bindings if binding-related keys changed
         binding_keys = {CONF_BOUND_ENTITY, CONF_VALUE_MIN, CONF_VALUE_MAX, CONF_UPDATE_MODE}

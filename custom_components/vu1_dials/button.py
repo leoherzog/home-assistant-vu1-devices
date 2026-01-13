@@ -6,11 +6,12 @@ from typing import Any
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, get_dial_device_info
 from .vu1_api import VU1APIClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,15 +30,29 @@ async def async_setup_entry(
     client: VU1APIClient = data["client"]
 
     entities = []
-    
+
     entities.append(VU1ProvisionDialsButton(coordinator, client))
-    
+
     dial_data = coordinator.data.get("dials", {})
     for dial_uid, dial_info in dial_data.items():
         entities.append(VU1RefreshHardwareInfoButton(coordinator, client, dial_uid, dial_info))
         entities.append(VU1IdentifyDialButton(coordinator, client, dial_uid, dial_info))
 
     async_add_entities(entities)
+
+    # Register callback for creating entities when new dials are discovered
+    async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
+        """Create button entities for newly discovered dials."""
+        new_entities = []
+        for dial_uid, dial_info in new_dials.items():
+            _LOGGER.info("Creating button entities for new dial %s", dial_uid)
+            new_entities.append(VU1RefreshHardwareInfoButton(coordinator, client, dial_uid, dial_info))
+            new_entities.append(VU1IdentifyDialButton(coordinator, client, dial_uid, dial_info))
+        if new_entities:
+            async_add_entities(new_entities)
+
+    unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
+    config_entry.async_on_unload(unsub)
 
 
 class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
@@ -54,7 +69,7 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:plus-circle"
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information for the VU1 server."""
         return {
             "identifiers": {(DOMAIN, self.coordinator.server_device_identifier)},
@@ -66,15 +81,31 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
         """Handle the button press."""
         try:
             _LOGGER.info("Provisioning new dials via VU1 server")
-            
+
+            # Get dial UIDs before provisioning
+            known_dial_uids = self.coordinator.get_known_dial_uids()
+
             # Call the provision endpoint to detect and add new dials
             result = await self._client.provision_new_dials()
-            
+
             # Trigger coordinator refresh to discover any newly provisioned dials
             await self.coordinator.async_request_refresh()
-            
-            _LOGGER.info("Successfully provisioned new dials: %s", result)
-            
+
+            # Check for new dials after refresh
+            current_dial_uids = set(self.coordinator.data.get("dials", {}).keys()) if self.coordinator.data else set()
+            new_dial_uids = current_dial_uids - known_dial_uids
+
+            if new_dial_uids:
+                _LOGGER.info("Discovered %d new dial(s): %s", len(new_dial_uids), new_dial_uids)
+                # Update known dials
+                self.coordinator.update_known_dials(current_dial_uids)
+                # Notify all registered callbacks to create entities for new dials
+                await self.coordinator.async_notify_new_dials(new_dial_uids)
+            else:
+                _LOGGER.info("No new dials discovered during provisioning")
+
+            _LOGGER.info("Successfully provisioned dials: %s", result)
+
         except Exception as err:
             _LOGGER.error("Failed to provision new dials: %s", err)
             raise
@@ -100,17 +131,10 @@ class VU1RefreshHardwareInfoButton(CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:refresh"
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information."""
-        dials_data = self.coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._dial_uid, {})
-        return {
-            "identifiers": {(DOMAIN, self._dial_uid)},
-            "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
-            "manufacturer": "Streacom",
-            "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
-        }
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {}) if self.coordinator.data else {}
+        return get_dial_device_info(self._dial_uid, dial_data, self.coordinator.server_device_identifier)
 
     async def async_press(self) -> None:
         """Handle the button press."""
@@ -153,17 +177,10 @@ class VU1IdentifyDialButton(CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:lightbulb-on"
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information."""
-        dials_data = self.coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._dial_uid, {})
-        return {
-            "identifiers": {(DOMAIN, self._dial_uid)},
-            "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
-            "manufacturer": "Streacom",
-            "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
-        }
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {}) if self.coordinator.data else {}
+        return get_dial_device_info(self._dial_uid, dial_data, self.coordinator.server_device_identifier)
 
     async def async_press(self) -> None:
         """Handle the button press - perform identify animation."""

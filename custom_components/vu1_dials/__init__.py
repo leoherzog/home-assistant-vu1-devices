@@ -38,7 +38,7 @@ from .const import (
     ATTR_MEDIA_CONTENT_ID,
 )
 from .coordinator import VU1DataUpdateCoordinator
-from .vu1_api import VU1APIClient, VU1APIError
+from .vu1_api import VU1APIClient, VU1APIError, VU1ConnectionError, VU1AuthError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,15 +87,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not connection_result["connected"]:
             error_msg = connection_result["error"] or "Unknown connection error"
             raise ConfigEntryNotReady(f"Cannot connect to VU1 server: {error_msg}")
-        
+
         # Log authentication status for debugging
         if connection_result["authenticated"]:
             _LOGGER.debug("VU1 server connection successful with valid API key")
         else:
-            _LOGGER.warning("VU1 server reachable but API key validation failed: %s", 
+            _LOGGER.warning("VU1 server reachable but API key validation failed: %s",
                           connection_result["error"])
+    except VU1ConnectionError as err:
+        raise ConfigEntryNotReady(f"Cannot connect to VU1 server: {err}") from err
+    except VU1AuthError as err:
+        raise ConfigEntryNotReady(f"Authentication failed with VU1 server: {err}") from err
     except VU1APIError as err:
-        raise ConfigEntryNotReady(f"Failed to connect to VU1 server: {err}") from err
+        raise ConfigEntryNotReady(f"Failed to communicate with VU1 server: {err}") from err
 
     update_interval = timedelta(
         seconds=entry.options.get("update_interval", DEFAULT_UPDATE_INTERVAL)
@@ -140,6 +144,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     await coordinator.async_config_entry_first_refresh()
+
+    # Initialize known dial UIDs before platform setup to avoid race conditions
+    if coordinator.data:
+        initial_dial_uids = set(coordinator.data.get("dials", {}).keys())
+        coordinator.update_known_dials(initial_dial_uids)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
@@ -213,9 +222,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if device:
             device_registry.async_remove_device(device.id)
 
-        # Unregister services if this is the last config entry
+        # Unregister services and clean up shared managers if this is the last config entry
         if not hass.data[DOMAIN]:
             async_unload_services(hass)
+            # Clean up shared managers to prevent memory leaks
+            hass.data.pop(f"{DOMAIN}_config_manager", None)
+            hass.data.pop(f"{DOMAIN}_binding_manager", None)
 
     return unload_ok
 
@@ -439,7 +451,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Required(ATTR_DIAL_UID): cv.string,
-                vol.Optional(ATTR_MEDIA_CONTENT_ID): cv.string,
+                vol.Required(ATTR_MEDIA_CONTENT_ID): cv.string,
             }
         ),
     )

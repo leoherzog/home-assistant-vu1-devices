@@ -5,7 +5,6 @@ from typing import Any
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
-from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     DOMAIN,

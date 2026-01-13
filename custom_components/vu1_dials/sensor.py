@@ -52,6 +52,27 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
+    # Register callback for creating entities when new dials are discovered
+    async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
+        """Create sensor entities for newly discovered dials."""
+        new_entities = []
+        for dial_uid, dial_info in new_dials.items():
+            _LOGGER.info("Creating sensor entities for new dial %s", dial_uid)
+            new_entities.append(VU1DialSensor(coordinator, client, dial_uid, dial_info))
+            new_entities.extend([
+                VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
+                VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
+                VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
+                VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
+                VU1ProtocolVersionSensor(coordinator, dial_uid, dial_info),
+                VU1FirmwareHashSensor(coordinator, dial_uid, dial_info),
+            ])
+        if new_entities:
+            async_add_entities(new_entities)
+
+    unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
+    config_entry.async_on_unload(unsub)
+
 
 class VU1DialSensor(CoordinatorEntity, SensorEntity):
     """Representation of a VU1 dial sensor."""

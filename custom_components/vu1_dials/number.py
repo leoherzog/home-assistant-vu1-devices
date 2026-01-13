@@ -55,6 +55,27 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
+    # Register callback for creating entities when new dials are discovered
+    async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
+        """Create number entities for newly discovered dials."""
+        new_entities = []
+        for dial_uid, dial_info in new_dials.items():
+            _LOGGER.info("Creating number entities for new dial %s", dial_uid)
+            new_entities.append(VU1DialNumber(coordinator, client, dial_uid, dial_info))
+            new_entities.extend([
+                VU1ValueMinNumber(coordinator, dial_uid, dial_info),
+                VU1ValueMaxNumber(coordinator, dial_uid, dial_info),
+                VU1DialEasingPeriodNumber(coordinator, dial_uid, dial_info),
+                VU1DialEasingStepNumber(coordinator, dial_uid, dial_info),
+                VU1BacklightEasingPeriodNumber(coordinator, dial_uid, dial_info),
+                VU1BacklightEasingStepNumber(coordinator, dial_uid, dial_info),
+            ])
+        if new_entities:
+            async_add_entities(new_entities)
+
+    unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
+    config_entry.async_on_unload(unsub)
+
 
 class VU1DialNumber(CoordinatorEntity, NumberEntity):
     """Representation of a VU1 dial number entity."""

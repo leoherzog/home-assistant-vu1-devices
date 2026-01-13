@@ -6,11 +6,12 @@ from typing import Any
 from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, get_dial_device_info
 from .vu1_api import VU1APIClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,6 +38,19 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
+    # Register callback for creating entities when new dials are discovered
+    async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
+        """Create image entities for newly discovered dials."""
+        new_entities = []
+        for dial_uid, dial_info in new_dials.items():
+            _LOGGER.info("Creating image entity for new dial %s", dial_uid)
+            new_entities.append(VU1DialBackgroundImage(hass, coordinator, client, dial_uid, dial_info))
+        if new_entities:
+            async_add_entities(new_entities)
+
+    unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
+    config_entry.async_on_unload(unsub)
+
 
 class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
     """Image entity showing the current background image of a VU1 dial."""
@@ -58,17 +72,10 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         self._image_last_updated: datetime | None = None
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information."""
-        dials_data = self.coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._dial_uid, {})
-        return {
-            "identifiers": {(DOMAIN, self._dial_uid)},
-            "name": dial_data.get("dial_name", f"VU1 Dial {self._dial_uid}"),
-            "manufacturer": "Streacom",
-            "model": "VU1 Dial",
-            "via_device": (DOMAIN, self.coordinator.server_device_identifier),
-        }
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {}) if self.coordinator.data else {}
+        return get_dial_device_info(self._dial_uid, dial_data, self.coordinator.server_device_identifier)
 
     @property
     def available(self) -> bool:
@@ -170,16 +177,26 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         """Return when the image was last updated."""
         return self._image_last_updated
 
-    async def async_update(self) -> None:
-        """Update the image entity."""
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
         # Check if image has changed according to server
         if self.coordinator.data:
             dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
             detailed_status = dial_data.get("detailed_status", {})
-            
+
             # If server indicates image changed, clear cache to force refresh
             if detailed_status.get("image_changed", False):
                 _LOGGER.debug("Server indicates image changed for dial %s, clearing cache", self._dial_uid)
                 self._cached_image = None
                 self._last_image_file = None
                 self._image_last_updated = None
+
+            # Also check if image file path changed
+            current_image_file = self._get_current_image_file()
+            if current_image_file and current_image_file != self._last_image_file:
+                _LOGGER.debug("Image file path changed for dial %s, clearing cache", self._dial_uid)
+                self._cached_image = None
+                self._image_last_updated = None
+
+        # Call parent to trigger state update
+        super()._handle_coordinator_update()

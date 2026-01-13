@@ -9,14 +9,22 @@ import os
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["VU1APIClient", "VU1APIError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT"]
+__all__ = ["VU1APIClient", "VU1APIError", "VU1ConnectionError", "VU1AuthError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT"]
 
 DEFAULT_PORT = 5340
 DEFAULT_TIMEOUT = 10
 
 
 class VU1APIError(Exception):
-    """Exception raised for VU1 API errors."""
+    """Base exception for VU1 API errors."""
+
+
+class VU1ConnectionError(VU1APIError):
+    """Exception raised for connection/network errors."""
+
+
+class VU1AuthError(VU1APIError):
+    """Exception raised for authentication errors (401/403)."""
 
 
 class VU1APIClient:
@@ -133,13 +141,13 @@ class VU1APIClient:
                     
         except aiohttp.ClientResponseError as err:
             if err.status == 401:
-                raise VU1APIError(f"Authentication failed: Invalid API key") from err
+                raise VU1AuthError("Authentication failed: Invalid API key") from err
             elif err.status == 403:
-                raise VU1APIError(f"Access forbidden: Invalid API key") from err
+                raise VU1AuthError("Access forbidden: Invalid API key") from err
             else:
                 raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
         except (ClientError, asyncio.TimeoutError) as err:
-            raise VU1APIError(f"Connection error: {err}") from err
+            raise VU1ConnectionError(f"Connection error: {err}") from err
 
     async def test_connection(self) -> dict[str, Any]:
         """Test connection and API key, returning detailed status."""
@@ -154,8 +162,17 @@ class VU1APIClient:
                 "dials": response.get("data", []),
                 "error": None,
             }
-        except VU1APIError as err:
-            # Server responded but API key is invalid
+        except VU1ConnectionError as err:
+            # Network-level connection failure (timeout, refused, etc.)
+            _LOGGER.error("Connection to VU1 server failed: %s", err)
+            return {
+                "connected": False,
+                "authenticated": False,
+                "dials": [],
+                "error": str(err),
+            }
+        except VU1AuthError as err:
+            # Server responded but API key is invalid (401/403)
             _LOGGER.error("API key validation failed during connection test: %s", err)
             return {
                 "connected": True,
@@ -163,14 +180,14 @@ class VU1APIClient:
                 "dials": [],
                 "error": str(err),
             }
-        except (ClientError, asyncio.TimeoutError) as err:
-            # Network-level connection failure
-            _LOGGER.error("Connection to VU1 server failed: %s", err)
+        except VU1APIError as err:
+            # Other API errors (server responded but with an error)
+            _LOGGER.error("API error during connection test: %s", err)
             return {
-                "connected": False,
+                "connected": True,
                 "authenticated": False,
                 "dials": [],
-                "error": f"Connection error: {err}",
+                "error": str(err),
             }
 
     async def get_dial_list(self) -> list[dict[str, Any]]:
@@ -256,14 +273,13 @@ class VU1APIClient:
                     
         except aiohttp.ClientResponseError as err:
             if err.status == 401:
-                raise VU1APIError(f"Authentication failed: Invalid API key") from err
+                raise VU1AuthError("Authentication failed: Invalid API key") from err
             elif err.status == 403:
-                raise VU1APIError(f"Access forbidden: Invalid API key") from err
+                raise VU1AuthError("Access forbidden: Invalid API key") from err
             else:
                 raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
         except (ClientError, asyncio.TimeoutError) as err:
-            raise VU1APIError(f"Connection error: {err}") from err
-
+            raise VU1ConnectionError(f"Connection error: {err}") from err
 
     async def reload_dial(self, dial_uid: str) -> None:
         """Reload dial configuration."""

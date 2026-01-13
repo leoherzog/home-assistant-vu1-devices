@@ -200,6 +200,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._dials = []
         self._selected_dial = None
         self._dial_config_data = {}
+        # Store options collected during the flow to preserve update_interval
+        self._collected_options: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -223,11 +225,17 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             self._dials = []
 
         if user_input is not None:
+            # Preserve update_interval in collected options for later
+            if "update_interval" in user_input:
+                self._collected_options["update_interval"] = user_input["update_interval"]
+
             if "configure_dial" in user_input and user_input["configure_dial"]:
                 self._selected_dial = user_input["configure_dial"]
                 return await self.async_step_configure_dial()
-            
-            return self.async_create_entry(title="", data=user_input)
+
+            # Merge collected options with user input for final entry
+            final_options = {**self.config_entry.options, **self._collected_options, **user_input}
+            return self.async_create_entry(title="", data=final_options)
 
         schema_dict = {
             vol.Optional(
@@ -341,9 +349,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     binding_manager = async_get_binding_manager(self.hass)
                     if binding_manager:
                         await binding_manager.async_reconfigure_dial_binding(self._selected_dial)
-                    
-                    return self.async_create_entry(title="", data=self.config_entry.options)
-                    
+
+                    # Merge collected options (including update_interval) with existing options
+                    final_options = {**self.config_entry.options, **self._collected_options}
+                    return self.async_create_entry(title="", data=final_options)
+
                 except Exception as err:
                     _LOGGER.error("Failed to update dial configuration: %s", err)
                     errors["base"] = "config_update_failed"
@@ -407,9 +417,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             binding_manager = async_get_binding_manager(self.hass)
             if binding_manager:
                 await binding_manager.async_reconfigure_dial_binding(self._selected_dial)
-            
-            return self.async_create_entry(title="", data=self.config_entry.options)
-            
+
+            # Merge collected options (including update_interval) with existing options
+            final_options = {**self.config_entry.options, **self._collected_options}
+            return self.async_create_entry(title="", data=final_options)
+
         except Exception as err:
             _LOGGER.error("Failed to update dial configuration: %s", err)
             return self.async_abort(reason="config_update_failed")

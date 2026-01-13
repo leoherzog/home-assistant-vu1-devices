@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -44,6 +44,10 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         self.server_device_identifier: str | None = None
         # Binding manager reference (set later)
         self._binding_manager: Any = None
+        # Callbacks for adding new entities when dials are discovered
+        self._new_dial_callbacks: list[Any] = []
+        # Track known dial UIDs for detecting new dials
+        self._known_dial_uids: set[str] = set()
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from VU1 server."""
@@ -105,6 +109,42 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
     def set_binding_manager(self, binding_manager: Any) -> None:
         """Set the binding manager reference."""
         self._binding_manager = binding_manager
+
+    def register_new_dial_callback(self, callback: Any) -> Callable[[], None]:
+        """Register a callback to be called when new dials are discovered.
+
+        Returns an unsubscribe function that removes the callback.
+        """
+        self._new_dial_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            """Remove the callback from the list."""
+            if callback in self._new_dial_callbacks:
+                self._new_dial_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def get_known_dial_uids(self) -> set[str]:
+        """Get the set of currently known dial UIDs."""
+        return self._known_dial_uids.copy()
+
+    def update_known_dials(self, dial_uids: set[str]) -> None:
+        """Update the set of known dial UIDs."""
+        self._known_dial_uids = dial_uids
+
+    async def async_notify_new_dials(self, new_dial_uids: set[str]) -> None:
+        """Notify callbacks about newly discovered dials."""
+        if not new_dial_uids:
+            return
+
+        dial_data = self.data.get("dials", {}) if self.data else {}
+        # Iterate over a copy to allow safe modification during iteration
+        for callback in list(self._new_dial_callbacks):
+            try:
+                new_dials_data = {uid: dial_data.get(uid, {}) for uid in new_dial_uids}
+                await callback(new_dials_data)
+            except Exception as err:
+                _LOGGER.error("Error in new dial callback: %s", err)
 
     async def _sync_name_from_server(self, dial_uid: str, server_name: str | None) -> None:
         """Sync device name from server to Home Assistant if it has changed."""
