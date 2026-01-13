@@ -2,7 +2,7 @@
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -123,11 +123,6 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         return "%"
 
     @property
-    def device_class(self) -> SensorDeviceClass | None:
-        """Return the device class."""
-        return None
-
-    @property
     def state_class(self) -> SensorStateClass | None:
         """Return the state class."""
         return SensorStateClass.MEASUREMENT
@@ -136,11 +131,6 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
     def icon(self) -> str:
         """Return the icon for the sensor."""
         return "mdi:gauge"
-
-    @property
-    def should_poll(self) -> bool:
-        """No polling needed, we use coordinator."""
-        return False
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -219,11 +209,6 @@ class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
         detailed_status = dial_data.get("detailed_status", {})
         return detailed_status.get(self._data_key)
 
-    @property
-    def should_poll(self) -> bool:
-        """No polling needed, we use coordinator."""
-        return False
-
 
 class VU1FirmwareVersionSensor(VU1DiagnosticSensorBase):
     """Sensor for firmware version."""
@@ -259,5 +244,3 @@ class VU1FirmwareHashSensor(VU1DiagnosticSensorBase):
         """Initialize the firmware hash sensor."""
         super().__init__(coordinator, dial_uid, dial_data, "fw_hash", "Firmware hash")
         self._attr_icon = "mdi:fingerprint"
-
-

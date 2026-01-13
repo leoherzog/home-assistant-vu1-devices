@@ -94,7 +94,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 await self._sync_name_from_server(dial_uid, dial.get("dial_name"))
                 await self._check_server_behavior_change(dial_uid, status)
 
-            if hasattr(self, '_binding_manager') and self._binding_manager:
+            if self._binding_manager:
                 await self._binding_manager.async_update_bindings({"dials": dial_data})
 
             return {"dials": dial_data}

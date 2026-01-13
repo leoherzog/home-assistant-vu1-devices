@@ -4,8 +4,6 @@ from typing import Any
 
 from homeassistant.components.number import NumberEntity
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.core import callback
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -465,21 +463,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         self._attr_unique_id = f"{dial_uid}_update_mode_status"
         self._attr_name = "Update mode"
         self._attr_icon = "mdi:update"
-        # Remove entity_category for sensor entities
         self._attr_entity_category = None
-
-    # Config change listeners inherited from base class
-
-    async def _on_config_change(self, dial_uid: str, config: dict[str, Any]) -> None:
-        """Handle configuration changes."""
-        if dial_uid == self._dial_uid:
-            # Trigger immediate state update
-            self.async_schedule_update_ha_state()
-
-    @property
-    def should_poll(self) -> bool:
-        """No polling needed, we rely on coordinator updates."""
-        return False
 
     @property
     def native_value(self) -> str:
@@ -520,21 +504,7 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         self._attr_unique_id = f"{dial_uid}_bound_entity_status"
         self._attr_name = "Bound entity"
         self._attr_icon = "mdi:link"
-        # Remove entity_category for sensor entities
         self._attr_entity_category = None
-
-    # Config change listeners inherited from base class
-
-    async def _on_config_change(self, dial_uid: str, config: dict[str, Any]) -> None:
-        """Handle configuration changes."""
-        if dial_uid == self._dial_uid:
-            # Trigger immediate state update
-            self.async_schedule_update_ha_state()
-
-    @property
-    def should_poll(self) -> bool:
-        """No polling needed, we rely on coordinator updates."""
-        return False
 
     @property
     def native_value(self) -> str:

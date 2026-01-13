@@ -181,13 +181,3 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
             })
 
         return attributes
-
-    async def async_added_to_hass(self) -> None:
-        """Run when entity is added to hass."""
-        await super().async_added_to_hass()
-        
-        # Registry event tracking removed due to compatibility issues
-
-    async def async_will_remove_from_hass(self) -> None:
-        """When entity will be removed from hass."""
-        await super().async_will_remove_from_hass()

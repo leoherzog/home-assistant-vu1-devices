@@ -1,11 +1,11 @@
 """VU1 API Client for communicating with VU1 server."""
 import asyncio
 import logging
+import os
 from typing import Any
 
 import aiohttp
 from aiohttp import ClientError, ClientTimeout
-import os
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -392,5 +392,3 @@ async def discover_vu1_addon() -> dict[str, Any]:
     except Exception as err:
         _LOGGER.error("Error discovering VU1 Server add-on: %s", err)
         return {}
-
-

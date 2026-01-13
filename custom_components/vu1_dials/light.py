@@ -201,14 +201,8 @@ class VU1BacklightLight(CoordinatorEntity, LightEntity):
         """Get current backlight state from coordinator data."""
         if not self.coordinator.data:
             return None
-        
+
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
         detailed_status = dial_data.get("detailed_status", {})
         return detailed_status.get("backlight")
-
-
-    @property
-    def should_poll(self) -> bool:
-        """No polling needed, we rely on coordinator updates."""
-        return False

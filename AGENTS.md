@@ -127,9 +127,10 @@ async def provision_new_dials()                # Detect newly connected dials
 ```
 
 **Error Handling:**
-- `VU1APIError` raised for API-level errors
-- HTTP 401/403 → Authentication failure
-- Connection errors wrapped with context
+Exception hierarchy for granular error handling:
+- `VU1APIError` - Base exception for all API errors
+- `VU1ConnectionError(VU1APIError)` - Network/connection failures (timeout, refused)
+- `VU1AuthError(VU1APIError)` - Authentication failures (HTTP 401/403)
 
 **Add-on Discovery:**
 ```python
@@ -182,6 +183,20 @@ When a name change originates from HA:
 2. Server updates ignored during grace period
 3. Grace period expires, normal sync resumes
 
+**Dynamic Dial Discovery:**
+Supports runtime discovery of new dials via callback registration:
+```python
+# Register callback (returns unsubscribe function)
+unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
+config_entry.async_on_unload(unsub)
+
+# Callback signature
+async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
+    """Create entities for newly discovered dials."""
+```
+
+Platform setup modules register callbacks to create entities when the Provision button discovers new dials. The coordinator tracks known dial UIDs and notifies callbacks only for genuinely new dials.
+
 ### `sensor_binding.py` - Automatic Sensor Binding
 
 **Class: `VU1SensorBindingManager`**
@@ -220,6 +235,14 @@ Handles various input formats:
 - Direct numeric: `"23.5"` → `23.5`
 - With units: `"23.5°C"` → `23.5` (regex extraction)
 - Special states: `"unknown"`, `"unavailable"` → `None`
+
+**Reference-Counted Listeners:**
+State change listeners use reference counting to support multiple dials bound to the same entity:
+```python
+# Listener structure: entity_id -> {"unsub": callable, "count": int}
+self._listeners[entity_id] = {"unsub": unsub, "count": 1}
+```
+When a binding is removed, the count decrements. The listener is only unsubscribed when count reaches zero.
 
 ### `device_config.py` - Persistent Configuration
 
@@ -265,10 +288,12 @@ Multi-step setup:
 **Class: `OptionsFlowHandler`**
 
 Multi-step dial configuration:
-1. `async_step_init()` - Select dial and global settings
+1. `async_step_init()` - Select dial and global settings (e.g., update_interval)
 2. `async_step_configure_dial()` - Choose update mode (auto/manual)
 3. `async_step_configure_automatic()` - Bind sensor with value range
 4. `async_step_configure_manual()` - Remove binding
+
+Global options (like `update_interval`) are preserved across dial configuration steps via `_collected_options`.
 
 ---
 
@@ -323,7 +348,7 @@ BEHAVIOR_PRESETS = {
 
 | Entity | Description |
 |--------|-------------|
-| VU1ProvisionDialsButton | Discover newly connected dials (on server device) |
+| VU1ProvisionDialsButton | Discover newly connected dials (on server device), triggers entity creation callbacks |
 | VU1RefreshHardwareInfoButton | Reload dial hardware info |
 | VU1IdentifyDialButton | Flash white animation to identify physical dial |
 
@@ -333,6 +358,19 @@ BEHAVIOR_PRESETS = {
 - Fetches current dial background via API
 - Caches image data to avoid repeated fetches
 - Invalidates cache when `image_file` changes
+- Uses `_handle_coordinator_update()` for cache invalidation on coordinator refresh
+
+### Device Actions (`device_action.py`)
+
+Provides automation actions for dial configuration with easing presets:
+```python
+EASING_PRESETS = {
+    "responsive": {"dial": (50, 20), "backlight": (50, 20)},
+    "balanced": {"dial": (50, 5), "backlight": (50, 10)},
+    "smooth": {"dial": (50, 1), "backlight": (50, 5)},
+}
+```
+Actions apply presets by name rather than raw period/step values.
 
 ---
 
@@ -368,13 +406,18 @@ class VU1ExampleEntity(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {}) if self.coordinator.data else {}
         return get_dial_device_info(self._dial_uid, dial_data, self.coordinator.server_device_identifier)
 
     @property
     def native_value(self):
         return self.coordinator.data.get("dials", {}).get(self._dial_uid, {}).get("value")
 ```
+
+**Notes:**
+- `CoordinatorEntity` provides `should_poll = False` by default—do not override unless necessary
+- Use `get_dial_device_info()` from `const.py` for consistent device info across entities
+- Always guard `coordinator.data` access (may be `None` before first refresh)
 
 ### Adding a New Service
 1. Add constant to `const.py`:
@@ -396,6 +439,10 @@ class VU1ExampleEntity(CoordinatorEntity, SensorEntity):
 try:
     await client.some_api_call()
     await coordinator.async_request_refresh()
+except VU1ConnectionError as err:
+    raise ConfigEntryNotReady(f"Cannot connect: {err}") from err
+except VU1AuthError as err:
+    raise ConfigEntryNotReady(f"Authentication failed: {err}") from err
 except VU1APIError as err:
     _LOGGER.error("Failed to do thing: %s", err)
     raise HomeAssistantError(f"Failed: {err}") from err
@@ -459,6 +506,7 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
 - [ ] Config flow: Manual connection
 - [ ] Config flow: Add-on discovery
 - [ ] Options flow: Sensor binding
+- [ ] Options flow: update_interval preserved during dial configuration
 - [ ] Entity creation for all platforms
 - [ ] Dial value changes update hardware
 - [ ] Backlight color picker works
@@ -466,6 +514,7 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
 - [ ] Image upload via media browser
 - [ ] Behavior presets apply correctly
 - [ ] Sensor binding auto-updates dial
+- [ ] Dynamic dial discovery: Provision button creates entities for new dials
 
 ### Debugging Tips
 1. Enable debug logging:

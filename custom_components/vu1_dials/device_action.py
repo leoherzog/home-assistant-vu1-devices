@@ -154,29 +154,12 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
     if not dial_uid:
         raise HomeAssistantError(f"Device {device_id} is not a VU1 dial")
     
-    # Prepare configuration
-    dial_config = {}
-    
-    if CONF_BOUND_ENTITY in config:
-        dial_config[CONF_BOUND_ENTITY] = config[CONF_BOUND_ENTITY]
-    
-    if CONF_VALUE_MIN in config:
-        dial_config[CONF_VALUE_MIN] = config[CONF_VALUE_MIN]
-    
-    if CONF_VALUE_MAX in config:
-        dial_config[CONF_VALUE_MAX] = config[CONF_VALUE_MAX]
-    
-    if CONF_BACKLIGHT_COLOR in config:
-        dial_config[CONF_BACKLIGHT_COLOR] = config[CONF_BACKLIGHT_COLOR]
-    
-    if CONF_DIAL_EASING in config:
-        dial_config[CONF_DIAL_EASING] = config[CONF_DIAL_EASING]
-    
-    if CONF_BACKLIGHT_EASING in config:
-        dial_config[CONF_BACKLIGHT_EASING] = config[CONF_BACKLIGHT_EASING]
-    
-    if CONF_UPDATE_MODE in config:
-        dial_config[CONF_UPDATE_MODE] = config[CONF_UPDATE_MODE]
+    # Extract configuration keys from action config
+    config_keys = [
+        CONF_BOUND_ENTITY, CONF_VALUE_MIN, CONF_VALUE_MAX,
+        CONF_BACKLIGHT_COLOR, CONF_DIAL_EASING, CONF_BACKLIGHT_EASING, CONF_UPDATE_MODE
+    ]
+    dial_config = {key: config[key] for key in config_keys if key in config}
     
     # Update configuration
     from .device_config import async_get_config_manager
