@@ -1,4 +1,6 @@
 """Support for VU1 dial number entities."""
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Any
 
