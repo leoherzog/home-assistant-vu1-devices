@@ -42,6 +42,7 @@ async def async_setup_entry(
         ])
         
         entities.extend([
+            VU1ServerNameSensor(coordinator, dial_uid, dial_info),
             VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
             VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
             VU1ProtocolVersionSensor(coordinator, dial_uid, dial_info),
@@ -60,6 +61,7 @@ async def async_setup_entry(
             new_entities.extend([
                 VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
                 VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
+                VU1ServerNameSensor(coordinator, dial_uid, dial_info),
                 VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
                 VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
                 VU1ProtocolVersionSensor(coordinator, dial_uid, dial_info),
@@ -240,3 +242,39 @@ class VU1FirmwareHashSensor(VU1DiagnosticSensorBase):
         """Initialize the firmware hash sensor."""
         super().__init__(coordinator, dial_uid, dial_data, "fw_hash", "Firmware hash")
         self._attr_icon = "mdi:fingerprint"
+
+
+class VU1ServerNameSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing the device name as stored on the VU-Server."""
+
+    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
+        """Initialize the server name sensor."""
+        super().__init__(coordinator)
+        self._dial_uid = dial_uid
+        self._attr_unique_id = f"{dial_uid}_server_name"
+        self._attr_name = "Server name"
+        self._attr_has_entity_name = True
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_icon = "mdi:rename"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information about this VU1 dial."""
+        dial_data = {}
+        if self.coordinator.data:
+            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        return get_dial_device_info(
+            self._dial_uid, dial_data, self.coordinator.server_device_identifier
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the device name from the VU-Server."""
+        if not self.coordinator.data:
+            return None
+
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        if not dial_data:
+            return None
+
+        return dial_data.get("dial_name")
