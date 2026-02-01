@@ -87,7 +87,7 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{DOMAIN}_{dial_uid}"
-        self._attr_name = dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
+        self._attr_name = "Value"
         self._attr_has_entity_name = True
 
     @property

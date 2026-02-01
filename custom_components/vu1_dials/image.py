@@ -68,8 +68,6 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         self._attr_name = "Background image"
         self._attr_has_entity_name = True
         self._attr_icon = "mdi:image"
-        # Set device class to indicate this is an image-related entity
-        self._attr_device_class = "image"
         self._cached_image: bytes | None = None
         self._last_image_file: str | None = None
         self._image_last_updated: datetime | None = None
@@ -150,9 +148,9 @@ class VU1DialBackgroundImage(CoordinatorEntity, ImageEntity):
         return "image/png"
 
     @property
-    def state_attributes(self) -> dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return state attributes."""
-        attributes = super().state_attributes or {}
+        attributes = super().extra_state_attributes or {}
         
         # Add image file information
         image_file = self._get_current_image_file()

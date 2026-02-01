@@ -102,7 +102,7 @@ class VU1SensorBindingManager:
         """Create a new sensor binding."""
         # Validate entity exists
         entity_registry = er.async_get(self.hass)
-        if not entity_registry.async_get(entity_id):
+        if not entity_registry.async_get(entity_id) and not self.hass.states.get(entity_id):
             _LOGGER.warning("Bound entity %s does not exist for dial %s", entity_id, dial_uid)
             return
 

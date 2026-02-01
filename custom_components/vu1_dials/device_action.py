@@ -156,10 +156,29 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
     
     # Extract configuration keys from action config
     config_keys = [
-        CONF_BOUND_ENTITY, CONF_VALUE_MIN, CONF_VALUE_MAX,
-        CONF_BACKLIGHT_COLOR, CONF_DIAL_EASING, CONF_BACKLIGHT_EASING, CONF_UPDATE_MODE
+        CONF_BOUND_ENTITY,
+        CONF_VALUE_MIN,
+        CONF_VALUE_MAX,
+        CONF_BACKLIGHT_COLOR,
+        CONF_UPDATE_MODE,
     ]
     dial_config = {key: config[key] for key in config_keys if key in config}
+
+    # Map preset names to numeric easing values for storage/hardware
+    dial_period = dial_step = None
+    backlight_period = backlight_step = None
+
+    dial_preset = config.get(CONF_DIAL_EASING)
+    if dial_preset in EASING_PRESETS:
+        dial_period, dial_step = EASING_PRESETS[dial_preset]["dial"]
+        dial_config["dial_easing_period"] = dial_period
+        dial_config["dial_easing_step"] = dial_step
+
+    backlight_preset = config.get(CONF_BACKLIGHT_EASING)
+    if backlight_preset in EASING_PRESETS:
+        backlight_period, backlight_step = EASING_PRESETS[backlight_preset]["backlight"]
+        dial_config["backlight_easing_period"] = backlight_period
+        dial_config["backlight_easing_step"] = backlight_step
     
     # Update configuration
     from .device_config import async_get_config_manager
@@ -167,18 +186,13 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
     await config_manager.async_update_dial_config(dial_uid, dial_config)
     
     # Get the client and coordinator to apply changes immediately
-    client = None
-    coordinator = None
-    for entry_data in hass.data[DOMAIN].values():
-        coord = entry_data["coordinator"]
-        if coord.data and dial_uid in coord.data.get("dials", {}):
-            client = entry_data["client"]
-            coordinator = coord
-            break
-    
-    if not client:
-        _LOGGER.error("Could not find client for dial %s", dial_uid)
+    from . import _get_dial_client_and_coordinator
+
+    result = _get_dial_client_and_coordinator(hass, dial_uid)
+    if not result:
+        _LOGGER.error("Could not find client/coordinator for dial %s", dial_uid)
         return
+    client, coordinator = result
     
     # Apply changes to physical device immediately
     try:
@@ -189,25 +203,27 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
             _LOGGER.debug("Applied backlight color %s to dial %s", backlight_color, dial_uid)
         
         # Apply easing settings if specified - use preset values
-        if CONF_DIAL_EASING in config:
-            preset_name = config[CONF_DIAL_EASING]
-            if preset_name in EASING_PRESETS:
-                dial_period, dial_step = EASING_PRESETS[preset_name]["dial"]
-                await client.set_dial_easing(dial_uid, dial_period, dial_step)
-                _LOGGER.debug("Applied dial easing preset '%s' to dial %s: period=%s, step=%s",
-                            preset_name, dial_uid, dial_period, dial_step)
-            else:
-                _LOGGER.warning("Unknown dial easing preset: %s", preset_name)
+        if dial_period is not None and dial_step is not None:
+            coordinator.mark_behavior_change_from_ha(dial_uid)
+            await client.set_dial_easing(dial_uid, dial_period, dial_step)
+            _LOGGER.debug(
+                "Applied dial easing preset '%s' to dial %s: period=%s, step=%s",
+                dial_preset,
+                dial_uid,
+                dial_period,
+                dial_step,
+            )
 
-        if CONF_BACKLIGHT_EASING in config:
-            preset_name = config[CONF_BACKLIGHT_EASING]
-            if preset_name in EASING_PRESETS:
-                backlight_period, backlight_step = EASING_PRESETS[preset_name]["backlight"]
-                await client.set_backlight_easing(dial_uid, backlight_period, backlight_step)
-                _LOGGER.debug("Applied backlight easing preset '%s' to dial %s: period=%s, step=%s",
-                            preset_name, dial_uid, backlight_period, backlight_step)
-            else:
-                _LOGGER.warning("Unknown backlight easing preset: %s", preset_name)
+        if backlight_period is not None and backlight_step is not None:
+            coordinator.mark_behavior_change_from_ha(dial_uid)
+            await client.set_backlight_easing(dial_uid, backlight_period, backlight_step)
+            _LOGGER.debug(
+                "Applied backlight easing preset '%s' to dial %s: period=%s, step=%s",
+                backlight_preset,
+                dial_uid,
+                backlight_period,
+                backlight_step,
+            )
         
         # Update sensor bindings if binding-related keys changed
         binding_keys = {CONF_BOUND_ENTITY, CONF_VALUE_MIN, CONF_VALUE_MAX, CONF_UPDATE_MODE}

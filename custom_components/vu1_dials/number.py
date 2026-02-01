@@ -114,12 +114,12 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
     def native_value(self) -> float | None:
         """Return the current value."""
         if not self.coordinator.data:
-            return 0.0
+            return None
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
         detailed_status = dial_data.get("detailed_status", {})
         value = detailed_status.get("value")
-        return float(value) if value is not None else 0.0
+        return float(value) if value is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the dial value."""

@@ -20,6 +20,7 @@ from .const import (
     DEFAULT_BACKLIGHT_COLOR,
     DEFAULT_UPDATE_MODE,
     UPDATE_MODE_AUTOMATIC,
+    UPDATE_MODE_MANUAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ class VU1DialConfigManager:
             validated[CONF_BACKLIGHT_COLOR] = list(defaults[CONF_BACKLIGHT_COLOR])
 
         # Validate update_mode is one of the allowed values
-        if validated.get(CONF_UPDATE_MODE) not in [UPDATE_MODE_AUTOMATIC, "manual"]:
+        if validated.get(CONF_UPDATE_MODE) not in [UPDATE_MODE_AUTOMATIC, UPDATE_MODE_MANUAL]:
             validated[CONF_UPDATE_MODE] = defaults[CONF_UPDATE_MODE]
 
         return validated
@@ -146,7 +147,10 @@ class VU1DialConfigManager:
             return False
         
         entity_registry = er.async_get(self.hass)
-        return entity_registry.async_get(entity_id) is not None
+        if entity_registry.async_get(entity_id) is not None:
+            return True
+
+        return self.hass.states.get(entity_id) is not None
 
     @callback
     def async_add_listener(self, dial_uid: str, listener) -> None:

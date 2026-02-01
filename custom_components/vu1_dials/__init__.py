@@ -180,6 +180,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
         
         if not device:
             return
+
+        # Only handle updates for devices tied to this config entry
+        if entry.entry_id not in device.config_entries:
+            return
             
         # Check if it's one of our dial devices
         for identifier_domain, identifier_value in device.identifiers:
