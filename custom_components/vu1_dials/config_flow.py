@@ -320,9 +320,48 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_configure_dial(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Configure specific dial with proper entity selector."""
+        """Configure specific dial - choose what to configure."""
+        if not self._selected_dial:
+            return await self.async_step_init()
+
+        if user_input is not None:
+            action = user_input["dial_action"]
+            if action == "update_mode":
+                return await self.async_step_configure_update_mode()
+            elif action == "upload_image":
+                return await self.async_step_upload_image()
+
+        coordinator = self.config_entry.runtime_data.coordinator
+        dials_data = coordinator.data.get("dials", {})
+        dial_data = dials_data.get(self._selected_dial, {})
+        dial_name = dial_data.get("dial_name", self._selected_dial)
+
+        schema = vol.Schema({
+            vol.Required("dial_action"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": "update_mode", "label": "Configure update mode"},
+                        {"value": "upload_image", "label": "Upload background image"},
+                    ]
+                )
+            ),
+        })
+
+        return self.async_show_form(
+            step_id="configure_dial",
+            data_schema=schema,
+            description_placeholders={
+                "dial_name": dial_name,
+                "info": "Choose what to configure for this dial."
+            },
+        )
+
+    async def async_step_configure_update_mode(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose update mode for the dial."""
         errors: dict[str, str] = {}
-        
+
         if not self._selected_dial:
             return await self.async_step_init()
 
@@ -332,8 +371,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             current_config = config_manager.get_dial_config(self._selected_dial)
         except Exception as err:
             _LOGGER.error("Failed to get device config manager: %s", err)
-            errors["base"] = "config_error"
-            return await self.async_step_init()
+            return self.async_abort(reason="config_error")
 
         if user_input is not None:
             if user_input["update_mode"] == "automatic":
@@ -361,12 +399,68 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         })
 
         return self.async_show_form(
-            step_id="configure_dial",
+            step_id="configure_update_mode",
             data_schema=schema,
             errors=errors,
             description_placeholders={
                 "dial_name": dial_name,
                 "info": "Choose how this dial should be updated."
+            },
+        )
+
+    async def async_step_upload_image(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Upload a background image for the dial."""
+        errors: dict[str, str] = {}
+
+        if not self._selected_dial:
+            return await self.async_step_init()
+
+        if user_input is not None:
+            uploaded_file_id = user_input.get("background_image")
+            if uploaded_file_id:
+                try:
+                    from homeassistant.components.file_upload import process_uploaded_file
+                    import mimetypes
+
+                    with process_uploaded_file(self.hass, uploaded_file_id) as file_path:
+                        image_data = await self.hass.async_add_executor_job(file_path.read_bytes)
+                        content_type = mimetypes.guess_type(str(file_path))[0] or "image/png"
+
+                    client = self.config_entry.runtime_data.client
+                    await client.set_dial_image(self._selected_dial, image_data, content_type)
+
+                    coordinator = self.config_entry.runtime_data.coordinator
+                    await coordinator.async_request_refresh()
+                except Exception as err:
+                    _LOGGER.error("Failed to upload image for dial %s: %s", self._selected_dial, err)
+                    errors["base"] = "image_upload_failed"
+
+            if not errors:
+                final_options = {**self.config_entry.options, **self._collected_options}
+                return self.async_create_entry(title="", data=final_options)
+
+        from homeassistant.helpers.selector import FileSelector, FileSelectorConfig
+
+        schema = vol.Schema({
+            vol.Required("background_image"): FileSelector(
+                FileSelectorConfig(accept="image/png,image/jpeg,.png,.jpg,.jpeg")
+            ),
+        })
+
+        coordinator = self.config_entry.runtime_data.coordinator
+        dials_data = coordinator.data.get("dials", {})
+        dial_data = dials_data.get(self._selected_dial, {})
+        dial_name = dial_data.get("dial_name", self._selected_dial)
+
+        return self.async_show_form(
+            step_id="upload_image",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "dial_name": dial_name,
+                "info": "Upload a PNG or JPEG image. The VU1 dial display is 144x200 pixels.",
             },
         )
 
@@ -385,8 +479,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             current_config = config_manager.get_dial_config(self._selected_dial)
         except Exception as err:
             _LOGGER.error("Failed to get device config manager: %s", err)
-            errors["base"] = "config_error"
-            return await self.async_step_configure_dial()
+            return self.async_abort(reason="config_error")
 
         if user_input is not None:
             value_min = user_input.get("value_min", 0)

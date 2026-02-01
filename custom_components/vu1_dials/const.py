@@ -37,7 +37,6 @@ SERVICE_RELOAD_DIAL = "reload_dial"
 SERVICE_CALIBRATE_DIAL = "calibrate_dial"
 
 # Attributes
-ATTR_DIAL_UID = "dial_uid"
 ATTR_VALUE = "value"
 ATTR_RED = "red"
 ATTR_GREEN = "green"
@@ -107,7 +106,6 @@ __all__ = [
     "SERVICE_SET_DIAL_IMAGE",
     "SERVICE_RELOAD_DIAL",
     "SERVICE_CALIBRATE_DIAL",
-    "ATTR_DIAL_UID",
     "ATTR_VALUE",
     "ATTR_RED",
     "ATTR_GREEN",

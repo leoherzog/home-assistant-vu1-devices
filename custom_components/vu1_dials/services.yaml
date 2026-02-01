@@ -1,14 +1,10 @@
 set_dial_value:
   name: Set Dial Value
   description: Set the needle position of a VU1 dial (0-100%). Note - For automatic sensor binding, use the config flow instead of this service.
+  target:
+    entity:
+      integration: vu1_dials
   fields:
-    dial_uid:
-      name: Dial UID
-      description: The unique identifier of the dial (found in dial attributes)
-      required: true
-      example: "590056000650564139323920"
-      selector:
-        text:
     value:
       name: Value
       description: The dial value to set (0-100%)
@@ -23,14 +19,10 @@ set_dial_value:
 set_dial_backlight:
   name: Set Dial Backlight
   description: Set the RGB backlight color of a VU1 dial. Tip - Use the light entity for a visual color picker interface instead.
+  target:
+    entity:
+      integration: vu1_dials
   fields:
-    dial_uid:
-      name: Dial UID
-      description: The unique identifier of the dial (found in dial attributes)
-      required: true
-      example: "590056000650564139323920"
-      selector:
-        text:
     red:
       name: Red
       description: Red color component (0-100%)
@@ -64,15 +56,11 @@ set_dial_backlight:
 
 set_dial_name:
   name: Set Dial Name
-  description: Set the display name of a VU1 dial. This will sync bidirectionally with Home Assistant entity names.
+  description: Set the display name of a single VU1 dial. Only one device can be selected at a time. This will sync bidirectionally with Home Assistant entity names.
+  target:
+    entity:
+      integration: vu1_dials
   fields:
-    dial_uid:
-      name: Dial UID
-      description: The unique identifier of the dial (found in dial attributes)
-      required: true
-      example: "590056000650564139323920"
-      selector:
-        text:
     name:
       name: Name
       description: The new display name for the dial
@@ -84,41 +72,29 @@ set_dial_name:
 set_dial_image:
   name: Set Dial Background Image
   description: Set the background image of a VU1 dial using media from Home Assistant's media library.
+  target:
+    entity:
+      integration: vu1_dials
   fields:
-    dial_uid:
-      name: Dial UID
-      description: The unique identifier of the dial (found in dial attributes)
-      required: true
-      example: "590056000650564139323920"
-      selector:
-        text:
     media_content_id:
       name: Media Content
       description: Select an image from your media library to set as the dial background
       required: true
       selector:
         media:
+          accept:
+            - "image/*"
 
 reload_dial:
   name: Reload Dial
   description: Reload hardware configuration and refresh information for a VU1 dial. Also available as a button entity for each dial.
-  fields:
-    dial_uid:
-      name: Dial UID
-      description: The unique identifier of the dial (found in dial attributes)
-      required: true
-      example: "590056000650564139323920"
-      selector:
-        text:
+  target:
+    entity:
+      integration: vu1_dials
 
 calibrate_dial:
   name: Calibrate Dial
   description: Perform hardware calibration for a VU1 dial. This will move the needle to calibrate its position.
-  fields:
-    dial_uid:
-      name: Dial UID
-      description: The unique identifier of the dial (found in dial attributes)
-      required: true
-      example: "590056000650564139323920"
-      selector:
-        text:
+  target:
+    entity:
+      integration: vu1_dials

@@ -95,8 +95,8 @@ class VU1APIClient:
             headers["X-Ingress-Path"] = f"/{endpoint}"
             _LOGGER.debug("Using ingress mode with supervisor token")
         
-        # Always add VU1 API key as query parameter
-        if self.api_key:
+        # Add VU1 API key unless the caller already provided admin_key
+        if self.api_key and "admin_key" not in params:
             params["key"] = self.api_key
             
         return headers, params
@@ -303,9 +303,20 @@ class VU1APIClient:
 
 
     async def provision_new_dials(self) -> dict[str, Any]:
-        """Provision new dials that have been detected by the server."""
-        response = await self._request("GET", "api/v0/dial/provision")
-        return response.get("data", {})
+        """Provision new dials that have been detected by the server.
+
+        Requires the master key (admin privileges). Regular API keys will fail.
+        """
+        try:
+            response = await self._request("GET", "api/v0/dial/provision", {"admin_key": self.api_key})
+            return response.get("data", {})
+        except VU1AuthError as err:
+            raise VU1AuthError(
+                "Provisioning requires the VU1 Server master key. "
+                "The configured API key does not have admin privileges. "
+                "Check your VU1 Server config.yaml for the master_key value "
+                "and reconfigure the integration with it."
+            ) from err
 
 
 async def discover_vu1_addon() -> dict[str, Any]:

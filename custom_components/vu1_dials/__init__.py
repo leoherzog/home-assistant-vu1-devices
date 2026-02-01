@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback, Event
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import EVENT_DEVICE_REGISTRY_UPDATED, EventDeviceRegistryUpdatedData
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
@@ -34,7 +35,6 @@ from .const import (
     SERVICE_SET_DIAL_IMAGE,
     SERVICE_RELOAD_DIAL,
     SERVICE_CALIBRATE_DIAL,
-    ATTR_DIAL_UID,
     ATTR_VALUE,
     ATTR_RED,
     ATTR_GREEN,
@@ -251,6 +251,91 @@ def async_unload_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_DIAL)
 
 
+def _resolve_dial_uids_from_call(hass: HomeAssistant, call: ServiceCall) -> list[str]:
+    """Resolve dial UIDs from a service call's target devices.
+
+    Handles all target selector types: device_id, entity_id, area_id,
+    floor_id (resolved via areas), and label_id (resolved via device labels).
+    """
+    device_registry = dr.async_get(hass)
+    device_ids: set[str] = set()
+
+    # Direct device_id targets
+    raw_device_ids = call.data.get("device_id", [])
+    if isinstance(raw_device_ids, str):
+        raw_device_ids = [raw_device_ids]
+    device_ids.update(raw_device_ids)
+
+    # Resolve entity_id targets to device_ids
+    raw_entity_ids = call.data.get("entity_id", [])
+    if isinstance(raw_entity_ids, str):
+        raw_entity_ids = [raw_entity_ids]
+    if raw_entity_ids:
+        entity_registry = er.async_get(hass)
+        for entity_id in raw_entity_ids:
+            entry = entity_registry.async_get(entity_id)
+            if entry and entry.device_id:
+                device_ids.add(entry.device_id)
+            else:
+                _LOGGER.warning("Entity %s not found or has no device, skipping", entity_id)
+
+    # Resolve area_id targets to device_ids
+    raw_area_ids = call.data.get("area_id", [])
+    if isinstance(raw_area_ids, str):
+        raw_area_ids = [raw_area_ids]
+
+    # Resolve floor_id targets to area_ids first
+    raw_floor_ids = call.data.get("floor_id", [])
+    if isinstance(raw_floor_ids, str):
+        raw_floor_ids = [raw_floor_ids]
+    if raw_floor_ids:
+        area_registry = ar.async_get(hass)
+        for floor_id in raw_floor_ids:
+            for area_entry in ar.async_entries_for_floor(area_registry, floor_id):
+                raw_area_ids.append(area_entry.id)
+
+    for area_id in raw_area_ids:
+        for device in dr.async_entries_for_area(device_registry, area_id):
+            for entry_id in device.config_entries:
+                entry = hass.config_entries.async_get_entry(entry_id)
+                if entry and entry.domain == DOMAIN:
+                    device_ids.add(device.id)
+                    break
+
+    # Resolve label_id targets to device_ids
+    raw_label_ids = call.data.get("label_id", [])
+    if isinstance(raw_label_ids, str):
+        raw_label_ids = [raw_label_ids]
+    for label_id in raw_label_ids:
+        for device in dr.async_entries_for_label(device_registry, label_id):
+            for entry_id in device.config_entries:
+                entry = hass.config_entries.async_get_entry(entry_id)
+                if entry and entry.domain == DOMAIN:
+                    device_ids.add(device.id)
+                    break
+
+    if not device_ids:
+        raise ServiceValidationError("No target device specified")
+
+    # Resolve device_ids to dial_uids
+    dial_uids = []
+    for device_id in device_ids:
+        device = device_registry.async_get(device_id)
+        if not device:
+            _LOGGER.warning("Device %s not found, skipping", device_id)
+            continue
+        for identifier in device.identifiers:
+            if identifier[0] == DOMAIN and not identifier[1].startswith("vu1_server_"):
+                dial_uids.append(identifier[1])
+                break
+        else:
+            _LOGGER.warning("Device %s is not a VU1 dial, skipping", device_id)
+
+    if not dial_uids:
+        raise ServiceValidationError("No valid VU1 dial devices in target selection")
+    return dial_uids
+
+
 def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tuple[VU1APIClient, VU1DataUpdateCoordinator] | None:
     """Find the correct client and coordinator for a dial."""
     for entry in hass.config_entries.async_entries(DOMAIN):
@@ -292,6 +377,47 @@ async def _execute_dial_service(
         raise
 
 
+async def _execute_dial_service_for_all(
+    hass: HomeAssistant,
+    dial_uids: list[str],
+    action_name: str,
+    api_call_factory,
+    refresh: bool = True,
+) -> None:
+    """Execute a dial service across multiple dials, collecting errors.
+
+    Attempts every dial even if some fail. Raises a single
+    HomeAssistantError at the end listing which dials failed.
+    """
+    errors: dict[str, Exception] = {}
+    for dial_uid in dial_uids:
+        try:
+            await _execute_dial_service(
+                hass, dial_uid, action_name,
+                api_call_factory(dial_uid), refresh=refresh,
+            )
+        except Exception as err:  # noqa: BLE001
+            errors[dial_uid] = err
+
+    if errors:
+        failed = ", ".join(f"{uid}: {err}" for uid, err in errors.items())
+        raise HomeAssistantError(
+            f"Failed to {action_name} for {len(errors)}/{len(dial_uids)} dial(s): {failed}"
+        )
+
+
+# Shared schema fields for service target selectors.
+# When services.yaml declares `target:`, HA merges device_id/entity_id/area_id/etc
+# into call.data. The schema must allow these keys or vol.Schema(PREVENT_EXTRA) rejects them.
+_TARGET_SCHEMA_FIELDS = {
+    vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+    vol.Optional("entity_id"): vol.All(cv.ensure_list, [cv.string]),
+    vol.Optional("area_id"): vol.All(cv.ensure_list, [cv.string]),
+    vol.Optional("floor_id"): vol.All(cv.ensure_list, [cv.string]),
+    vol.Optional("label_id"): vol.All(cv.ensure_list, [cv.string]),
+}
+
+
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for VU1 integration."""
     # Only register services once (check if already registered)
@@ -300,38 +426,42 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
     async def set_dial_value(call: ServiceCall) -> None:
         """Set dial value service."""
-        dial_uid = call.data[ATTR_DIAL_UID]
+        dial_uids = _resolve_dial_uids_from_call(hass, call)
         value = call.data[ATTR_VALUE]
-        
-        await _execute_dial_service(
-            hass, dial_uid, "set dial value",
-            lambda client: client.set_dial_value(dial_uid, value)
+        await _execute_dial_service_for_all(
+            hass, dial_uids, "set dial value",
+            lambda uid: (lambda client: client.set_dial_value(uid, value)),
         )
 
     async def set_dial_backlight(call: ServiceCall) -> None:
         """Set dial backlight service."""
-        dial_uid = call.data[ATTR_DIAL_UID]
+        dial_uids = _resolve_dial_uids_from_call(hass, call)
         red = call.data[ATTR_RED]
         green = call.data[ATTR_GREEN]
         blue = call.data[ATTR_BLUE]
-        
-        await _execute_dial_service(
-            hass, dial_uid, "set dial backlight",
-            lambda client: client.set_dial_backlight(dial_uid, red, green, blue)
+        await _execute_dial_service_for_all(
+            hass, dial_uids, "set dial backlight",
+            lambda uid: (lambda client: client.set_dial_backlight(uid, red, green, blue)),
         )
 
     async def set_dial_name(call: ServiceCall) -> None:
         """Set dial name service."""
-        dial_uid = call.data[ATTR_DIAL_UID]
+        dial_uids = _resolve_dial_uids_from_call(hass, call)
+        if len(dial_uids) > 1:
+            raise ServiceValidationError(
+                "set_dial_name only supports a single target device. "
+                "Setting the same name on multiple dials is not supported."
+            )
+        dial_uid = dial_uids[0]
         name = call.data[ATTR_NAME]
-        
+
         result = _get_dial_client_and_coordinator(hass, dial_uid)
         if not result:
             _LOGGER.error("Dial %s not found for service call", dial_uid)
             raise ValueError(f"Dial {dial_uid} not found")
-        
+
         _client, coordinator = result
-        
+
         try:
             await coordinator.async_set_dial_name(dial_uid, name)
         except Exception as err:
@@ -342,37 +472,37 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         """Set dial background image service."""
         from homeassistant.components.media_source import async_resolve_media
 
-        dial_uid = call.data[ATTR_DIAL_UID]
+        dial_uids = _resolve_dial_uids_from_call(hass, call)
         media_content_id = call.data.get(ATTR_MEDIA_CONTENT_ID)
-        
+
         if not media_content_id:
             _LOGGER.error("No media content ID provided for dial image")
             raise ValueError("Media content ID is required")
-        
+
         try:
             # Resolve the media source URI to get actual file path/data
             _LOGGER.debug("Resolving media content ID: %s", media_content_id)
             resolved_media = await async_resolve_media(hass, media_content_id, None)
-            
+
             if not resolved_media.url:
                 raise ValueError("Could not resolve media content to URL")
-            
+
             # Read the image data from the resolved URL
             if resolved_media.url.startswith("file://"):
                 # Local file access
                 file_path = resolved_media.url[7:]  # Remove 'file://' prefix
-                
+
                 # Use async-friendly file operations to avoid blocking the event loop
                 if not await hass.async_add_executor_job(Path(file_path).exists):
                     raise ValueError(f"Media file not found: {file_path}")
-                
+
                 image_data = await hass.async_add_executor_job(Path(file_path).read_bytes)
-                
+
                 # Determine content type from file extension
                 content_type, _ = mimetypes.guess_type(file_path)
                 if not content_type or not content_type.startswith('image/'):
                     content_type = 'image/png'  # Default fallback
-                    
+
             else:
                 # Handle other URL types (HTTP, etc.) if needed
                 session = async_get_clientsession(hass)
@@ -381,40 +511,36 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                         raise ValueError(f"Failed to fetch media: HTTP {response.status}")
                     image_data = await response.read()
                     content_type = response.headers.get('content-type', 'image/png')
-            
+
             if not image_data:
                 raise ValueError("No image data retrieved from media source")
-            
+
             _LOGGER.debug("Retrieved image data: %d bytes, content-type: %s", len(image_data), content_type)
-            
-            # Upload to VU1 dial
-            await _execute_dial_service(
-                hass, dial_uid, "set dial image",
-                lambda client: client.set_dial_image(dial_uid, image_data, content_type)
+
+            # Upload to VU1 dial(s)
+            await _execute_dial_service_for_all(
+                hass, dial_uids, "set dial image",
+                lambda uid: (lambda client: client.set_dial_image(uid, image_data, content_type)),
             )
-            
-            _LOGGER.info("Successfully set background image for dial %s", dial_uid)
-            
+
         except Exception as err:
-            _LOGGER.error("Failed to set dial image for %s: %s", dial_uid, err)
+            _LOGGER.error("Failed to set dial image: %s", err)
             raise
 
     async def reload_dial(call: ServiceCall) -> None:
         """Reload dial service."""
-        dial_uid = call.data[ATTR_DIAL_UID]
-        
-        await _execute_dial_service(
-            hass, dial_uid, "reload dial",
-            lambda client: client.reload_dial(dial_uid)
+        dial_uids = _resolve_dial_uids_from_call(hass, call)
+        await _execute_dial_service_for_all(
+            hass, dial_uids, "reload dial",
+            lambda uid: (lambda client: client.reload_dial(uid)),
         )
 
     async def calibrate_dial(call: ServiceCall) -> None:
         """Calibrate dial service."""
-        dial_uid = call.data[ATTR_DIAL_UID]
-        
-        await _execute_dial_service(
-            hass, dial_uid, "calibrate dial",
-            lambda client: client.calibrate_dial(dial_uid)
+        dial_uids = _resolve_dial_uids_from_call(hass, call)
+        await _execute_dial_service_for_all(
+            hass, dial_uids, "calibrate dial",
+            lambda uid: (lambda client: client.calibrate_dial(uid)),
         )
 
     hass.services.async_register(
@@ -423,7 +549,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         set_dial_value,
         schema=vol.Schema(
             {
-                vol.Required(ATTR_DIAL_UID): cv.string,
+                **_TARGET_SCHEMA_FIELDS,
                 vol.Required(ATTR_VALUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
             }
         ),
@@ -435,7 +561,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         set_dial_backlight,
         schema=vol.Schema(
             {
-                vol.Required(ATTR_DIAL_UID): cv.string,
+                **_TARGET_SCHEMA_FIELDS,
                 vol.Required(ATTR_RED): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
                 vol.Required(ATTR_GREEN): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
                 vol.Required(ATTR_BLUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
@@ -449,7 +575,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         set_dial_name,
         schema=vol.Schema(
             {
-                vol.Required(ATTR_DIAL_UID): cv.string,
+                **_TARGET_SCHEMA_FIELDS,
                 vol.Required(ATTR_NAME): cv.string,
             }
         ),
@@ -461,7 +587,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         set_dial_image,
         schema=vol.Schema(
             {
-                vol.Required(ATTR_DIAL_UID): cv.string,
+                **_TARGET_SCHEMA_FIELDS,
                 vol.Required(ATTR_MEDIA_CONTENT_ID): cv.string,
             }
         ),
@@ -471,12 +597,20 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_RELOAD_DIAL,
         reload_dial,
-        schema=vol.Schema({vol.Required(ATTR_DIAL_UID): cv.string}),
+        schema=vol.Schema(
+            {
+                **_TARGET_SCHEMA_FIELDS,
+            }
+        ),
     )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_CALIBRATE_DIAL,
         calibrate_dial,
-        schema=vol.Schema({vol.Required(ATTR_DIAL_UID): cv.string}),
+        schema=vol.Schema(
+            {
+                **_TARGET_SCHEMA_FIELDS,
+            }
+        ),
     )

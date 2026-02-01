@@ -54,7 +54,8 @@
     "error": {
       "config_error": "Failed to load device configuration",
       "config_update_failed": "Failed to update dial configuration",
-      "value_min_greater_than_max": "Minimum value must be less than maximum value"
+      "value_min_greater_than_max": "Minimum value must be less than maximum value",
+      "image_upload_failed": "Failed to upload image to the dial"
     },
     "step": {
       "init": {
@@ -66,12 +67,39 @@
         }
       },
       "configure_dial": {
-        "title": "Configure Dial",
-        "description": "Configure {dial_name}\n\n{info}",
+        "title": "Configure {dial_name}",
+        "description": "{info}",
+        "data": {
+          "dial_action": "Action"
+        }
+      },
+      "configure_update_mode": {
+        "title": "Update Mode",
+        "description": "Configure update mode for {dial_name}\n\n{info}",
         "data": {
           "update_mode": "Update mode"
         }
+      },
+      "upload_image": {
+        "title": "Upload Background Image",
+        "description": "Upload a background image for {dial_name}\n\n{info}",
+        "data": {
+          "background_image": "Background image"
+        }
+      },
+      "configure_automatic": {
+        "title": "Automatic Mode",
+        "description": "Configure automatic sensor binding for {dial_name}\n\n{info}",
+        "data": {
+          "bound_entity": "Bound sensor entity",
+          "value_min": "Minimum value",
+          "value_max": "Maximum value"
+        }
       }
+    },
+    "abort": {
+      "config_update_failed": "Failed to update dial configuration",
+      "config_error": "Failed to load device configuration"
     }
   },
   "entity": {
