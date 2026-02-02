@@ -13,6 +13,8 @@ from homeassistant.helpers import selector
 from .const import DOMAIN
 from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 
+from homeassistant.helpers import device_registry as dr
+
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["ConfigFlow", "OptionsFlowHandler"]
@@ -272,13 +274,19 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             coordinator = self.config_entry.runtime_data.coordinator
             if coordinator.data:
                 dials_data = coordinator.data.get("dials", {})
-                self._dials = [
-                    {
+                device_registry = dr.async_get(self.hass)
+                self._dials = []
+                for dial_uid, dial_data in dials_data.items():
+                    # Prefer device registry name (respects name_by_user) over server name
+                    device = device_registry.async_get_device(identifiers={(DOMAIN, dial_uid)})
+                    if device:
+                        dial_name = device.name_by_user or device.name or dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
+                    else:
+                        dial_name = dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
+                    self._dials.append({
                         "value": dial_uid,
-                        "label": f"{dial_data.get('dial_name', f'VU1 Dial {dial_uid}')} ({dial_uid})"
-                    }
-                    for dial_uid, dial_data in dials_data.items()
-                ]
+                        "label": f"{dial_name} ({dial_uid})",
+                    })
         except Exception as err:
             _LOGGER.warning("Could not get dial list for options: %s", err)
             self._dials = []
