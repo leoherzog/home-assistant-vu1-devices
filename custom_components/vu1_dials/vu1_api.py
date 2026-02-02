@@ -248,7 +248,7 @@ class VU1APIClient:
         
         # Create multipart form data
         form_data = aiohttp.FormData()
-        form_data.add_field('image', image_data, filename='background.png', content_type=content_type)
+        form_data.add_field('imgfile', image_data, filename='background.png', content_type=content_type)
         
         try:
             _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(image_data))
