@@ -23,18 +23,13 @@ __all__ = ["ConfigFlow", "OptionsFlowHandler"]
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VU1 Dials."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize config flow."""
         self._discovered_host: str | None = None
         self._discovered_port: int | None = None
-        self._discovery_method: str | None = None
-        self._discovered_ingress: bool = False
-        self._discovered_slug: str | None = None
-        self._supervisor_token: str | None = None
         self._addon_available: bool = False
-        self._addon_name: str | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -49,17 +44,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             
             if discovered and discovered.get("addon_discovered"):
                 self._addon_available = True
-                self._discovered_ingress = discovered.get("ingress", False)
-                self._discovered_slug = discovered.get("slug")
-                self._supervisor_token = discovered.get("supervisor_token")
-                self._discovered_host = discovered.get("host", discovered.get("addon_ip"))
-                self._discovered_port = discovered.get("port", discovered.get("ingress_port", 5340))
+                self._discovered_host = discovered.get("host")
+                self._discovered_port = discovered.get("port", 5340)
                 
-                # Extract user-friendly name from slug for display
-                addon_slug = discovered.get("slug", "")
-                self._addon_name = addon_slug.split("_")[-1] if "_" in addon_slug else addon_slug
-                
-                _LOGGER.info("VU1 Server add-on found: %s", self._addon_name)
+                _LOGGER.info("VU1 Server add-on found at %s:%s", self._discovered_host, self._discovered_port)
             else:
                 _LOGGER.info("No VU1 Server add-on found")
 
@@ -69,7 +57,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ]
             
             if self._addon_available:
-                options.insert(0, {"value": "addon", "label": f"VU1 Server Add-on ({self._addon_name or 'Unknown'})"})
+                options.insert(0, {"value": "addon", "label": "VU1 Server Add-on"})
             
             schema = vol.Schema({
                 vol.Required("connection_type"): selector.SelectSelector(
@@ -142,26 +130,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "port": self._discovered_port,
                 "api_key": user_input["api_key"],
             }
-            
-            # Add ingress configuration if applicable
-            if self._discovered_ingress:
-                full_input.update({
-                    "ingress": True,
-                    "ingress_slug": self._discovered_slug,
-                    "supervisor_token": self._supervisor_token,
-                })
-            
-            # Set unique ID based on connection type
-            if self._discovered_ingress:
-                await self.async_set_unique_id(f"vu1_server_ingress_{self._discovered_slug}")
-            else:
-                await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
+
+            await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
             self._abort_if_unique_id_configured()
             
             try:
                 info = await validate_input(self.hass, full_input)
-                # Override title to show it's an add-on
-                info["title"] = f"Add-on ({self._addon_name or 'Unknown'})"
+                info["title"] = "VU1 Server (Add-on)"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -181,7 +156,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=schema,
             errors=errors,
             description_placeholders={
-                "info": f"Enter the API key for the VU1 Server Add-on ({self._addon_name or 'Unknown'})."
+                "info": "Enter the API key for the VU1 Server Add-on."
             }
         )
 
@@ -219,21 +194,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data_updates=updated_data,
                 )
 
-        # Determine current values for defaults
-        is_ingress = entry.data.get("ingress", False)
-
-        if is_ingress:
-            # For ingress connections, only allow API key change
-            schema = vol.Schema({
-                vol.Required("api_key", default=entry.data.get("api_key", "")): cv.string,
-            })
-        else:
-            # For direct connections, allow host/port/api_key changes
-            schema = vol.Schema({
-                vol.Required("host", default=entry.data.get("host", "localhost")): cv.string,
-                vol.Required("port", default=entry.data.get("port", 5340)): cv.port,
-                vol.Required("api_key", default=entry.data.get("api_key", "")): cv.string,
-            })
+        schema = vol.Schema({
+            vol.Required("host", default=entry.data.get("host", "localhost")): cv.string,
+            vol.Required("port", default=entry.data.get("port", 5340)): cv.port,
+            vol.Required("api_key", default=entry.data.get("api_key", "")): cv.string,
+        })
 
         return self.async_show_form(
             step_id="reconfigure",
@@ -600,22 +565,12 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     """
-    if data.get("ingress"):
-        client = VU1APIClient(
-            host=data["host"],
-            port=data["port"],
-            ingress_slug=data["ingress_slug"],
-            supervisor_token=data["supervisor_token"],
-            api_key=data["api_key"],
-        )
-        connection_info = f"ingress ({data['ingress_slug']})"
-    else:
-        client = VU1APIClient(
-            host=data["host"],
-            port=data["port"],
-            api_key=data["api_key"],
-        )
-        connection_info = f"{data['host']}:{data['port']}"
+    client = VU1APIClient(
+        host=data["host"],
+        port=data["port"],
+        api_key=data["api_key"],
+    )
+    connection_info = f"{data['host']}:{data['port']}"
 
     try:
         _LOGGER.debug("Testing connection to VU1 server at %s", connection_info)

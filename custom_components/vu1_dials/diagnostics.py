@@ -12,8 +12,6 @@ from .device_config import async_get_config_manager
 
 TO_REDACT = {
     "api_key",
-    "supervisor_token",
-    "ingress_slug",
 }
 
 

@@ -28,6 +28,7 @@ from .const import (
     CONF_PORT,
     CONF_API_KEY,
     DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_PORT,
     DEFAULT_TIMEOUT,
     SERVICE_SET_DIAL_VALUE,
     SERVICE_SET_DIAL_BACKLIGHT,
@@ -75,31 +76,40 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
+    """Migrate config entry to a new version."""
+    _LOGGER.debug("Migrating config entry from version %s", entry.version)
+
+    if entry.version == 1:
+        new_data = dict(entry.data)
+
+        # v1 ingress entries stored the Supervisor ingress_port instead of the
+        # VU1 Server API port.  Fix the port and drop the unused ingress fields.
+        if new_data.pop("ingress", None):
+            new_data["port"] = DEFAULT_PORT
+            new_data.pop("ingress_slug", None)
+            new_data.pop("supervisor_token", None)
+            _LOGGER.info(
+                "Migrated ingress config entry to direct connection on port %s",
+                DEFAULT_PORT,
+            )
+
+        hass.config_entries.async_update_entry(entry, data=new_data, version=2)
+
+    _LOGGER.debug("Migration to version %s successful", entry.version)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     """Set up VU1 Dials from a config entry."""
+    host = entry.data[CONF_HOST]
+    port = entry.data[CONF_PORT]
     api_key = entry.data[CONF_API_KEY]
     timeout = entry.options.get("timeout", DEFAULT_TIMEOUT)
-    
-    # Create client based on connection type (ingress vs direct)
-    if entry.data.get("ingress"):
-        host = entry.data[CONF_HOST]
-        port = entry.data[CONF_PORT]
-        client = VU1APIClient(
-            host=host,
-            port=port,
-            ingress_slug=entry.data["ingress_slug"],
-            supervisor_token=entry.data["supervisor_token"],
-            api_key=api_key,
-            timeout=timeout,
-        )
-        connection_info = f"ingress ({entry.data['ingress_slug']})"
-        device_identifier = f"vu1_server_ingress_{entry.data['ingress_slug']}"
-    else:
-        host = entry.data[CONF_HOST]
-        port = entry.data[CONF_PORT]
-        client = VU1APIClient(host, port, api_key, timeout=timeout)
-        connection_info = f"{host}:{port}"
-        device_identifier = f"vu1_server_{host}_{port}"
+
+    client = VU1APIClient(host, port, api_key, timeout=timeout)
+    connection_info = f"{host}:{port}"
+    device_identifier = f"vu1_server_{host}_{port}"
 
     # Connection validation is handled by coordinator._async_setup during first refresh
     # which automatically raises ConfigEntryNotReady on failure
@@ -128,14 +138,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     # Register the VU1 server as a hub device
     device_registry = dr.async_get(hass)
     
-    # Determine device name based on connection type
-    if entry.data.get("ingress"):
-        # Extract add-on name from slug for display
-        addon_slug = entry.data.get("ingress_slug", "")
-        addon_name = addon_slug.split("_")[-1] if "_" in addon_slug else addon_slug
-        device_name = f"Add-on ({addon_name})"
-    else:
-        device_name = f"VU1 Server ({connection_info})"
+    device_name = f"VU1 Server ({connection_info})"
     
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,

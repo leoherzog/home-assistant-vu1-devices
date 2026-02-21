@@ -36,22 +36,14 @@ class VU1APIClient:
         port: int = DEFAULT_PORT,
         api_key: str = "",
         session: aiohttp.ClientSession | None = None,
-        ingress_slug: str | None = None,
-        supervisor_token: str | None = None,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         """Initialize VU1 API client."""
         self.host = host
         self.port = port
         self.api_key = api_key
-        self.ingress_slug = ingress_slug
-        self.supervisor_token = supervisor_token
         self.timeout = timeout
-        
         self.base_url = f"http://{host}:{port}"
-        # Determine if we should use ingress authentication mode
-        self._use_ingress = bool(self.ingress_slug and self.supervisor_token)
-            
         self._session = session
         self._close_session = False
 
@@ -77,28 +69,22 @@ class VU1APIClient:
 
     def _prepare_auth_headers_and_params(self, endpoint: str, params: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
         """Prepare authentication headers and parameters for API requests.
-        
+
         Args:
             endpoint: The API endpoint path
             params: Optional parameters dict to add auth to
-            
+
         Returns:
             Tuple of (headers_dict, params_dict)
         """
-        headers = {}
+        headers: dict[str, str] = {}
         if params is None:
             params = {}
-            
-        # For ingress mode, use supervisor token in headers
-        if self._use_ingress and self.supervisor_token:
-            headers["Authorization"] = f"Bearer {self.supervisor_token}"
-            headers["X-Ingress-Path"] = f"/{endpoint}"
-            _LOGGER.debug("Using ingress mode with supervisor token")
-        
+
         # Add VU1 API key unless the caller already provided admin_key
         if self.api_key and "admin_key" not in params:
             params["key"] = self.api_key
-            
+
         return headers, params
 
     async def _request(
@@ -348,48 +334,40 @@ async def discover_vu1_addon() -> dict[str, Any]:
                         if addon.get("state") == "started":
                             slug = addon.get("slug", "vu-server-addon")
                             
-                            # Get detailed addon info to check ingress configuration
+                            # Get detailed addon info to find the add-on's IP
                             async with session.get(f"http://supervisor/addons/{slug}/info", headers=headers) as info_response:
                                 if info_response.status == 200:
                                     addon_info = await info_response.json()
                                     addon_data = addon_info.get("data", {})
-                                    
-                                    # Check if ingress is enabled
-                                    if addon_data.get("ingress"):
-                                        ingress_port = addon_data.get("ingress_port", DEFAULT_PORT)
-                                        addon_ip = addon_data.get("ip_address")
-                                        _LOGGER.debug("Found VU1 Server add-on with ingress enabled on port %s", ingress_port)
+                                    addon_ip = addon_data.get("ip_address")
+
+                                    # Connect directly to the VU1 Server API port.
+                                    # The add-on's ingress proxy is for the web UI
+                                    # panel only — API clients bypass it.
+                                    if addon_ip:
+                                        _LOGGER.debug(
+                                            "Found VU1 Server add-on at %s:%s",
+                                            addon_ip,
+                                            DEFAULT_PORT,
+                                        )
                                         return {
-                                            "slug": slug,
-                                            "ingress": True,
-                                            "ingress_port": ingress_port,
-                                            "addon_ip": addon_ip,
+                                            "host": addon_ip,
+                                            "port": DEFAULT_PORT,
                                             "addon_discovered": True,
-                                            "supervisor_token": supervisor_token
                                         }
-                                    else:
-                                        # No ingress, use direct IP connection
-                                        addon_ip = addon_data.get("ip_address")
-                                        if addon_ip:
-                                            _LOGGER.debug("Found VU1 Server add-on without ingress, using IP: %s", addon_ip)
-                                            return {
-                                                "host": addon_ip,
-                                                "port": DEFAULT_PORT,
-                                                "addon_discovered": True
-                                            }
-                                        else:
-                                            # Fallback: construct hostname (less reliable)
-                                            repo = addon.get("repository", "local")
-                                            hostname = f"{repo}_{slug}".replace("_", "-")
-                                            _LOGGER.warning(
-                                                "No IP address found for add-on, falling back to constructed hostname: %s", 
-                                                hostname
-                                            )
-                                            return {
-                                                "host": hostname,
-                                                "port": DEFAULT_PORT,
-                                                "addon_discovered": True
-                                            }
+
+                                    # Fallback: construct hostname (less reliable)
+                                    repo = addon.get("repository", "local")
+                                    hostname = f"{repo}_{slug}".replace("_", "-")
+                                    _LOGGER.warning(
+                                        "No IP address found for add-on, falling back to constructed hostname: %s",
+                                        hostname,
+                                    )
+                                    return {
+                                        "host": hostname,
+                                        "port": DEFAULT_PORT,
+                                        "addon_discovered": True,
+                                    }
                                 else:
                                     _LOGGER.debug("Failed to get detailed add-on info")
                                     return {}
