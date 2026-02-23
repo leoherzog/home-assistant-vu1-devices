@@ -9,6 +9,7 @@ DOMAIN = "vu1_dials"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_API_KEY = "api_key"
+CONF_ADDON_MANAGED = "addon_managed"
 
 # Dial configuration keys
 CONF_BOUND_ENTITY = "bound_entity"
@@ -88,6 +89,7 @@ __all__ = [
     "CONF_HOST",
     "CONF_PORT",
     "CONF_API_KEY",
+    "CONF_ADDON_MANAGED",
     "CONF_BOUND_ENTITY",
     "CONF_VALUE_MIN",
     "CONF_VALUE_MAX",

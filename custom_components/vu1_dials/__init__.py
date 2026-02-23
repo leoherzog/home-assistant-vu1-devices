@@ -27,6 +27,7 @@ from .const import (
     CONF_HOST,
     CONF_PORT,
     CONF_API_KEY,
+    CONF_ADDON_MANAGED,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
@@ -44,7 +45,7 @@ from .const import (
     ATTR_MEDIA_CONTENT_ID,
 )
 from .coordinator import VU1DataUpdateCoordinator
-from .vu1_api import VU1APIClient, VU1APIError
+from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,6 +107,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     port = entry.data[CONF_PORT]
     api_key = entry.data[CONF_API_KEY]
     timeout = entry.options.get("timeout", DEFAULT_TIMEOUT)
+
+    # Migrate entries that stored a Docker IP (172.30.33.x) to the stable DNS
+    # hostname returned by the Supervisor API.  The hostname doesn't change
+    # across reboots, so this migration only needs to succeed once.
+    if host.startswith("172.30.33."):
+        discovered = await discover_vu1_addon()
+        if discovered and discovered.get("addon_discovered"):
+            new_host = discovered["host"]
+            new_port = discovered.get("port", port)
+            new_data = {
+                **entry.data,
+                CONF_ADDON_MANAGED: True,
+                CONF_HOST: new_host,
+                CONF_PORT: new_port,
+            }
+            _LOGGER.info(
+                "Migrating VU1 add-on config from Docker IP to stable hostname: "
+                "%s:%s -> %s:%s",
+                host, port, new_host, new_port,
+            )
+            host = new_host
+            port = new_port
+            hass.config_entries.async_update_entry(entry, data=new_data)
 
     client = VU1APIClient(host, port, api_key, timeout=timeout)
     connection_info = f"{host}:{port}"

@@ -10,7 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_ADDON_MANAGED
 from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 
 from homeassistant.helpers import device_registry as dr
@@ -129,6 +129,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "host": self._discovered_host,
                 "port": self._discovered_port,
                 "api_key": user_input["api_key"],
+                CONF_ADDON_MANAGED: True,
             }
 
             await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
@@ -167,6 +168,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         entry = self._get_reconfigure_entry()
 
+        # Re-discover add-on IP if this is an addon-managed entry
+        default_host = entry.data.get("host", "localhost")
+        default_port = entry.data.get("port", 5340)
+        if entry.data.get(CONF_ADDON_MANAGED):
+            discovered = await discover_vu1_addon()
+            if discovered and discovered.get("addon_discovered"):
+                default_host = discovered["host"]
+                default_port = discovered.get("port", 5340)
+
         if user_input is not None:
             # Build updated configuration
             updated_data = dict(entry.data)
@@ -195,8 +205,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
         schema = vol.Schema({
-            vol.Required("host", default=entry.data.get("host", "localhost")): cv.string,
-            vol.Required("port", default=entry.data.get("port", 5340)): cv.port,
+            vol.Required("host", default=default_host): cv.string,
+            vol.Required("port", default=default_port): cv.port,
             vol.Required("api_key", default=entry.data.get("api_key", "")): cv.string,
         })
 

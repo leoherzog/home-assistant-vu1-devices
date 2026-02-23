@@ -334,40 +334,36 @@ async def discover_vu1_addon() -> dict[str, Any]:
                         if addon.get("state") == "started":
                             slug = addon.get("slug", "vu-server-addon")
                             
-                            # Get detailed addon info to find the add-on's IP
+                            # Get detailed addon info for connection details
                             async with session.get(f"http://supervisor/addons/{slug}/info", headers=headers) as info_response:
                                 if info_response.status == 200:
                                     addon_info = await info_response.json()
                                     addon_data = addon_info.get("data", {})
-                                    addon_ip = addon_data.get("ip_address")
+
+                                    # Prefer the DNS hostname over ip_address.
+                                    # The hostname (e.g. "local-vu-server-addon") is
+                                    # stable across reboots; the Docker IP can change.
+                                    addon_host = addon_data.get("hostname") or addon_data.get("ip_address")
 
                                     # Connect directly to the VU1 Server API port.
                                     # The add-on's ingress proxy is for the web UI
                                     # panel only — API clients bypass it.
-                                    if addon_ip:
+                                    if addon_host:
                                         _LOGGER.debug(
                                             "Found VU1 Server add-on at %s:%s",
-                                            addon_ip,
+                                            addon_host,
                                             DEFAULT_PORT,
                                         )
                                         return {
-                                            "host": addon_ip,
+                                            "host": addon_host,
                                             "port": DEFAULT_PORT,
                                             "addon_discovered": True,
                                         }
 
-                                    # Fallback: construct hostname (less reliable)
-                                    repo = addon.get("repository", "local")
-                                    hostname = f"{repo}_{slug}".replace("_", "-")
                                     _LOGGER.warning(
-                                        "No IP address found for add-on, falling back to constructed hostname: %s",
-                                        hostname,
+                                        "No hostname or IP found for VU1 Server add-on"
                                     )
-                                    return {
-                                        "host": hostname,
-                                        "port": DEFAULT_PORT,
-                                        "addon_discovered": True,
-                                    }
+                                    return {}
                                 else:
                                     _LOGGER.debug("Failed to get detailed add-on info")
                                     return {}
