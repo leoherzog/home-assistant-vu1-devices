@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, get_dial_device_info
+from .const import DOMAIN, VU1DialEntity, async_setup_dial_entities
 from .config_entities import VU1UpdateModeSensor, VU1BoundEntitySensor
 
 if TYPE_CHECKING:
@@ -30,51 +29,24 @@ async def async_setup_entry(
     """Set up VU1 sensor entities."""
     coordinator = config_entry.runtime_data.coordinator
 
-    entities = []
-
-    dial_data = coordinator.data.get("dials", {})
-    for dial_uid, dial_info in dial_data.items():
-        entities.append(VU1DialSensor(coordinator, dial_uid, dial_info))
-        
-        entities.extend([
+    def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
+        return [
+            VU1DialSensor(coordinator, dial_uid, dial_info),
             VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
             VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
-        ])
-        
-        entities.extend([
             VU1ServerNameSensor(coordinator, dial_uid, dial_info),
             VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
             VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
             VU1ProtocolVersionSensor(coordinator, dial_uid, dial_info),
             VU1FirmwareHashSensor(coordinator, dial_uid, dial_info),
-        ])
+        ]
 
-    async_add_entities(entities)
-
-    # Register callback for creating entities when new dials are discovered
-    async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
-        """Create sensor entities for newly discovered dials."""
-        new_entities = []
-        for dial_uid, dial_info in new_dials.items():
-            _LOGGER.info("Creating sensor entities for new dial %s", dial_uid)
-            new_entities.append(VU1DialSensor(coordinator, dial_uid, dial_info))
-            new_entities.extend([
-                VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
-                VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
-                VU1ServerNameSensor(coordinator, dial_uid, dial_info),
-                VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
-                VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
-                VU1ProtocolVersionSensor(coordinator, dial_uid, dial_info),
-                VU1FirmwareHashSensor(coordinator, dial_uid, dial_info),
-            ])
-        if new_entities:
-            async_add_entities(new_entities)
-
-    unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
-    config_entry.async_on_unload(unsub)
+    async_setup_dial_entities(
+        coordinator, config_entry, async_add_entities, entity_factory,
+    )
 
 
-class VU1DialSensor(CoordinatorEntity, SensorEntity):
+class VU1DialSensor(VU1DialEntity, CoordinatorEntity, SensorEntity):
     """Representation of a VU1 dial sensor."""
 
     def __init__(
@@ -91,27 +63,17 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         self._attr_has_entity_name = True
 
     @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information about this VU1 dial."""
-        dial_data = {}
-        if self.coordinator.data:
-            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-        return get_dial_device_info(
-            self._dial_uid, dial_data, self.coordinator.server_device_identifier
-        )
-
-    @property
     def native_value(self) -> int | None:
         """Return the state of the sensor."""
         if not self.coordinator.data:
             _LOGGER.debug("No coordinator data available for %s", self._dial_uid)
             return None
-            
+
         dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
         if not dial_data:
             _LOGGER.debug("No dial data for %s", self._dial_uid)
             return None
-            
+
         detailed_status = dial_data.get("detailed_status", {})
         return detailed_status.get("value")
 
@@ -136,16 +98,16 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         attributes = {
             "dial_uid": self._dial_uid,
         }
-        
+
         if not self.coordinator.data:
             _LOGGER.debug("No coordinator data available for attributes on %s", self._dial_uid)
             return attributes
-            
+
         dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
         if not dial_data:
             _LOGGER.debug("No dial data available for attributes on %s", self._dial_uid)
             return attributes
-        
+
         attributes["dial_name"] = dial_data.get("dial_name")
 
         # Add backlight color information from detailed status
@@ -169,7 +131,7 @@ class VU1DialSensor(CoordinatorEntity, SensorEntity):
         return attributes
 
 
-class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
+class VU1DiagnosticSensorBase(VU1DialEntity, CoordinatorEntity, SensorEntity):
     """Base class for VU1 diagnostic sensors."""
 
     def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any], attr_name: str, sensor_name: str) -> None:
@@ -183,16 +145,6 @@ class VU1DiagnosticSensorBase(CoordinatorEntity, SensorEntity):
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_entity_registry_enabled_default = False
         self._attr_icon = "mdi:information"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information about this VU1 dial."""
-        dial_data = {}
-        if self.coordinator.data:
-            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-        return get_dial_device_info(
-            self._dial_uid, dial_data, self.coordinator.server_device_identifier
-        )
 
     @property
     def native_value(self) -> str | None:
@@ -244,7 +196,7 @@ class VU1FirmwareHashSensor(VU1DiagnosticSensorBase):
         self._attr_icon = "mdi:fingerprint"
 
 
-class VU1ServerNameSensor(CoordinatorEntity, SensorEntity):
+class VU1ServerNameSensor(VU1DialEntity, CoordinatorEntity, SensorEntity):
     """Sensor showing the device name as stored on the VU-Server."""
 
     def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
@@ -256,16 +208,6 @@ class VU1ServerNameSensor(CoordinatorEntity, SensorEntity):
         self._attr_has_entity_name = True
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_icon = "mdi:rename"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information about this VU1 dial."""
-        dial_data = {}
-        if self.coordinator.data:
-            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-        return get_dial_device_info(
-            self._dial_uid, dial_data, self.coordinator.server_device_identifier
-        )
 
     @property
     def native_value(self) -> str | None:

@@ -11,6 +11,7 @@ from homeassistant.helpers.typing import ConfigType, TemplateVarsType
 
 from .const import (
     DOMAIN,
+    BEHAVIOR_PRESETS,
     CONF_BOUND_ENTITY,
     CONF_VALUE_MIN,
     CONF_VALUE_MAX,
@@ -26,21 +27,14 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Easing presets matching VU-Server and select.py
-# Maps preset name to {"dial": (period, step), "backlight": (period, step)}
+# Derive the (period, step) tuple format from the canonical BEHAVIOR_PRESETS
 EASING_PRESETS = {
-    "responsive": {
-        "dial": (50, 20),      # Fast dial response
-        "backlight": (50, 20),  # Fast backlight response
-    },
-    "balanced": {
-        "dial": (50, 5),       # Balanced dial response
-        "backlight": (50, 10),  # Balanced backlight (different from dial)
-    },
-    "smooth": {
-        "dial": (50, 1),       # Smooth dial movement
-        "backlight": (50, 5),   # Smooth backlight (different from dial)
-    },
+    key: {
+        "dial": (p["dial_easing_period"], p["dial_easing_step"]),
+        "backlight": (p["backlight_easing_period"], p["backlight_easing_step"]),
+    }
+    for key, p in BEHAVIOR_PRESETS.items()
+    if "dial_easing_period" in p  # Skip "custom" which has no numeric values
 }
 
 __all__ = ["async_get_actions", "async_call_action_from_config", "async_get_action_capabilities"]

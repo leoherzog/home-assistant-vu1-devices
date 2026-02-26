@@ -1,7 +1,15 @@
 """Constants for the VU1 Dials integration."""
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Callable
 
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.helpers.entity import Entity
+    from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 DOMAIN = "vu1_dials"
 
@@ -59,6 +67,38 @@ DEFAULT_VALUE_MAX = 100
 DEFAULT_BACKLIGHT_COLOR = (100, 100, 100)  # White
 DEFAULT_UPDATE_MODE = UPDATE_MODE_MANUAL
 
+# Behavior presets matching the VU-Server web UI
+BEHAVIOR_PRESETS = {
+    "responsive": {
+        "name": "Responsive",
+        "dial_easing_period": 50,
+        "dial_easing_step": 20,
+        "backlight_easing_period": 50,
+        "backlight_easing_step": 20,
+        "description": "Dial is very responsive but may overshoot on large changes",
+    },
+    "balanced": {
+        "name": "Balanced",
+        "dial_easing_period": 50,
+        "dial_easing_step": 5,
+        "backlight_easing_period": 50,
+        "backlight_easing_step": 10,
+        "description": "Balance between responsive and smooth dial",
+    },
+    "smooth": {
+        "name": "Smooth",
+        "dial_easing_period": 50,
+        "dial_easing_step": 1,
+        "backlight_easing_period": 50,
+        "backlight_easing_step": 5,
+        "description": "Dial moves slowly with minimum overshoot",
+    },
+    "custom": {
+        "name": "Custom",
+        "description": "Manual configuration",
+    },
+}
+
 
 def get_dial_device_info(
     dial_uid: str,
@@ -84,43 +124,61 @@ def get_dial_device_info(
     )
 
 
-__all__ = [
-    "DOMAIN",
-    "CONF_HOST",
-    "CONF_PORT",
-    "CONF_API_KEY",
-    "CONF_ADDON_MANAGED",
-    "CONF_BOUND_ENTITY",
-    "CONF_VALUE_MIN",
-    "CONF_VALUE_MAX",
-    "CONF_BACKLIGHT_COLOR",
-    "CONF_DIAL_EASING",
-    "CONF_BACKLIGHT_EASING",
-    "CONF_UPDATE_MODE",
-    "DEFAULT_HOST",
-    "DEFAULT_PORT",
-    "DEFAULT_UPDATE_INTERVAL",
-    "DEFAULT_TIMEOUT",
-    "PLATFORMS",
-    "SERVICE_SET_DIAL_VALUE",
-    "SERVICE_SET_DIAL_BACKLIGHT",
-    "SERVICE_SET_DIAL_NAME",
-    "SERVICE_SET_DIAL_IMAGE",
-    "SERVICE_RELOAD_DIAL",
-    "SERVICE_CALIBRATE_DIAL",
-    "ATTR_VALUE",
-    "ATTR_RED",
-    "ATTR_GREEN",
-    "ATTR_BLUE",
-    "ATTR_NAME",
-    "ATTR_MEDIA_CONTENT_ID",
-    "MANUFACTURER",
-    "MODEL",
-    "UPDATE_MODE_AUTOMATIC",
-    "UPDATE_MODE_MANUAL",
-    "DEFAULT_VALUE_MIN",
-    "DEFAULT_VALUE_MAX",
-    "DEFAULT_BACKLIGHT_COLOR",
-    "DEFAULT_UPDATE_MODE",
-    "get_dial_device_info",
-]
+class VU1DialEntity:
+    """Mixin providing device_info for VU1 dial entities.
+
+    Add this to any entity class that represents a per-dial entity.
+    Requires the class to have ``_dial_uid`` and ``coordinator`` attributes
+    (both provided by entity __init__ and CoordinatorEntity).
+    """
+
+    _dial_uid: str
+    coordinator: DataUpdateCoordinator
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information about this VU1 dial."""
+        dial_data = (
+            self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+            if self.coordinator.data
+            else {}
+        )
+        return get_dial_device_info(
+            self._dial_uid, dial_data, self.coordinator.server_device_identifier
+        )
+
+
+def async_setup_dial_entities(
+    coordinator: DataUpdateCoordinator,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    entity_factory: Callable[[str, dict[str, Any]], list[Entity]],
+) -> None:
+    """Set up dial entities and register callback for new dial discovery.
+
+    This replaces the duplicated setup + callback pattern across all platform
+    modules. Call it from each platform's ``async_setup_entry``.
+
+    Args:
+        coordinator: The VU1DataUpdateCoordinator instance.
+        config_entry: The config entry being set up.
+        async_add_entities: The callback to register new entities.
+        entity_factory: A callable that takes (dial_uid, dial_info) and returns
+            a list of entities to create for that dial.
+    """
+    entities: list[Entity] = []
+    dial_data = coordinator.data.get("dials", {}) if coordinator.data else {}
+    for dial_uid, dial_info in dial_data.items():
+        entities.extend(entity_factory(dial_uid, dial_info))
+    async_add_entities(entities)
+
+    async def _async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
+        """Create entities for newly discovered dials."""
+        new_entities: list[Entity] = []
+        for dial_uid, dial_info in new_dials.items():
+            new_entities.extend(entity_factory(dial_uid, dial_info))
+        if new_entities:
+            async_add_entities(new_entities)
+
+    unsub = coordinator.register_new_dial_callback(_async_add_new_dial_entities)
+    config_entry.async_on_unload(unsub)

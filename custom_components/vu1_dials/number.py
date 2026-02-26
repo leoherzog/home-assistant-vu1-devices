@@ -6,11 +6,10 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, get_dial_device_info
+from .const import DOMAIN, VU1DialEntity, async_setup_dial_entities
 from .vu1_api import VU1APIClient
 from .config_entities import (
     VU1ValueMinNumber,
@@ -38,46 +37,23 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data.coordinator
     client = config_entry.runtime_data.client
 
-    entities = []
-    
-    dial_data = coordinator.data.get("dials", {})
-    for dial_uid, dial_info in dial_data.items():
-        entities.append(VU1DialNumber(coordinator, client, dial_uid, dial_info))
-        
-        entities.extend([
+    def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
+        return [
+            VU1DialNumber(coordinator, client, dial_uid, dial_info),
             VU1ValueMinNumber(coordinator, dial_uid, dial_info),
             VU1ValueMaxNumber(coordinator, dial_uid, dial_info),
             VU1DialEasingPeriodNumber(coordinator, dial_uid, dial_info),
             VU1DialEasingStepNumber(coordinator, dial_uid, dial_info),
             VU1BacklightEasingPeriodNumber(coordinator, dial_uid, dial_info),
             VU1BacklightEasingStepNumber(coordinator, dial_uid, dial_info),
-        ])
+        ]
 
-    async_add_entities(entities)
-
-    # Register callback for creating entities when new dials are discovered
-    async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
-        """Create number entities for newly discovered dials."""
-        new_entities = []
-        for dial_uid, dial_info in new_dials.items():
-            _LOGGER.info("Creating number entities for new dial %s", dial_uid)
-            new_entities.append(VU1DialNumber(coordinator, client, dial_uid, dial_info))
-            new_entities.extend([
-                VU1ValueMinNumber(coordinator, dial_uid, dial_info),
-                VU1ValueMaxNumber(coordinator, dial_uid, dial_info),
-                VU1DialEasingPeriodNumber(coordinator, dial_uid, dial_info),
-                VU1DialEasingStepNumber(coordinator, dial_uid, dial_info),
-                VU1BacklightEasingPeriodNumber(coordinator, dial_uid, dial_info),
-                VU1BacklightEasingStepNumber(coordinator, dial_uid, dial_info),
-            ])
-        if new_entities:
-            async_add_entities(new_entities)
-
-    unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
-    config_entry.async_on_unload(unsub)
+    async_setup_dial_entities(
+        coordinator, config_entry, async_add_entities, entity_factory,
+    )
 
 
-class VU1DialNumber(CoordinatorEntity, NumberEntity):
+class VU1DialNumber(VU1DialEntity, CoordinatorEntity, NumberEntity):
     """Representation of a VU1 dial number entity."""
 
     def __init__(
@@ -101,16 +77,6 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
         self._attr_icon = "mdi:gauge"
 
     @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information about this VU1 dial."""
-        dial_data = {}
-        if self.coordinator.data:
-            dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-        return get_dial_device_info(
-            self._dial_uid, dial_data, self.coordinator.server_device_identifier
-        )
-
-    @property
     def native_value(self) -> float | None:
         """Return the current value."""
         if not self.coordinator.data:
@@ -126,11 +92,18 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
         try:
             # First, switch to manual mode if currently in automatic mode
             await self._switch_to_manual_mode_if_needed()
-            
+
             # Set the dial value
             await self._client.set_dial_value(self._dial_uid, int(value))
-            # Trigger coordinator refresh to update state
-            await self.coordinator.async_request_refresh()
+
+            # Optimistically update coordinator data to avoid UI flicker.
+            # The VU1 server queues commands and applies them asynchronously,
+            # so polling immediately would return stale state.
+            if self.coordinator.data:
+                dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+                detailed_status = dial_data.get("detailed_status", {})
+                detailed_status["value"] = int(value)
+            self.async_write_ha_state()
         except Exception as err:
             _LOGGER.error("Failed to set dial value for %s: %s", self._dial_uid, err)
             raise
@@ -139,20 +112,20 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
         """Switch to manual mode if currently in automatic mode."""
         from .device_config import async_get_config_manager
         from .sensor_binding import async_get_binding_manager
-        
+
         config_manager = async_get_config_manager(self.hass)
         config = config_manager.get_dial_config(self._dial_uid)
-        
+
         # Only switch if currently in automatic mode
         if config.get("update_mode") == "automatic":
             _LOGGER.info("Switching dial %s from automatic to manual mode due to manual value change", self._dial_uid)
-            
+
             # Update configuration to manual mode
             await config_manager.async_update_dial_config(
-                self._dial_uid, 
+                self._dial_uid,
                 {"update_mode": "manual"}
             )
-            
+
             # Update sensor bindings to remove the automatic binding
             binding_manager = async_get_binding_manager(self.hass)
             await binding_manager.async_reconfigure_dial_binding(self._dial_uid)
@@ -164,7 +137,7 @@ class VU1DialNumber(CoordinatorEntity, NumberEntity):
             return {"dial_uid": self._dial_uid}
         dials_data = self.coordinator.data.get("dials", {})
         dial_data = dials_data.get(self._dial_uid, {})
-        
+
         attributes = {
             "dial_uid": self._dial_uid,
             "dial_name": dial_data.get("dial_name"),

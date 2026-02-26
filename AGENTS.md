@@ -26,7 +26,7 @@ custom_components/vu1_dials/
 ├── sensor_binding.py    # Automatic sensor-to-dial binding system
 ├── device_config.py     # Persistent storage for dial configurations
 ├── diagnostics.py       # Integration diagnostics for debugging
-├── const.py             # Constants, domain, service names, defaults
+├── const.py             # Constants, VU1DialEntity mixin, async_setup_dial_entities helper, BEHAVIOR_PRESETS
 ├── config_entities.py   # Configuration number/sensor entities (easing, range)
 ├── number.py            # Dial value number entity
 ├── sensor.py            # Dial status and diagnostic sensors
@@ -474,7 +474,7 @@ VU1 Server (hub)
 
 ### Entity Development Pattern
 ```python
-class VU1ExampleEntity(CoordinatorEntity, SensorEntity):
+class VU1ExampleEntity(VU1DialEntity, CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, dial_uid: str, dial_data: dict) -> None:
         super().__init__(coordinator)
         self._dial_uid = dial_uid
@@ -483,19 +483,30 @@ class VU1ExampleEntity(CoordinatorEntity, SensorEntity):
         self._attr_has_entity_name = True
 
     @property
-    def device_info(self) -> DeviceInfo:
-        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {}) if self.coordinator.data else {}
-        return get_dial_device_info(self._dial_uid, dial_data, self.coordinator.server_device_identifier)
-
-    @property
     def native_value(self):
         return self.coordinator.data.get("dials", {}).get(self._dial_uid, {}).get("value")
 ```
 
 **Notes:**
+- `VU1DialEntity` mixin (from `const.py`) provides `device_info` automatically—do not define it in entity classes
 - `CoordinatorEntity` provides `should_poll = False` by default—do not override unless necessary
-- Use `get_dial_device_info()` from `const.py` for consistent device info across entities
 - Always guard `coordinator.data` access (may be `None` before first refresh)
+
+### Platform Setup Pattern
+Use `async_setup_dial_entities()` from `const.py` to eliminate boilerplate:
+```python
+async def async_setup_entry(hass, config_entry, async_add_entities):
+    coordinator = config_entry.runtime_data.coordinator
+
+    def entity_factory(dial_uid: str, dial_info: dict) -> list:
+        return [VU1ExampleEntity(coordinator, dial_uid, dial_info)]
+
+    async_setup_dial_entities(coordinator, config_entry, async_add_entities, entity_factory)
+```
+This handles both initial entity creation and new-dial discovery callbacks. For server-level entities (not per-dial), add them separately before calling the helper.
+
+### Behavior Presets
+`BEHAVIOR_PRESETS` is defined once in `const.py` as the canonical source. Both `select.py` and `device_action.py` import from there. Do not define preset values in multiple places.
 
 ### Adding a New Service
 1. Add constant to `const.py`:
@@ -520,7 +531,21 @@ class VU1ExampleEntity(CoordinatorEntity, SensorEntity):
 raise UpdateFailed(f"Cannot connect: {err}")
 ```
 
-**During Runtime (in services/entities):**
+**During Runtime (in entities with UI state):**
+```python
+try:
+    await client.some_api_call()
+    # Optimistically update coordinator data — do NOT call async_request_refresh().
+    # The VU1 server queues commands and applies them asynchronously (~1s),
+    # so an immediate poll returns stale state and causes UI flicker.
+    coordinator.data["dials"][dial_uid]["detailed_status"]["value"] = new_value
+    self.async_write_ha_state()
+except VU1APIError as err:
+    _LOGGER.error("Failed to do thing: %s", err)
+    raise HomeAssistantError(f"Failed: {err}") from err
+```
+
+**During Runtime (in services without direct UI state):**
 ```python
 try:
     await client.some_api_call()
@@ -537,6 +562,26 @@ except VU1AuthError as err:
 except VU1APIError as err:
     raise UpdateFailed(f"API error: {err}", retry_after=60) from err
 ```
+
+### Optimistic Update Pattern (Entity Commands)
+
+The VU1 server uses a queue-and-batch architecture: API responses return `"Update queued"` immediately, but hardware changes are applied during a periodic update cycle (~1s). Calling `async_request_refresh()` right after a command returns stale state and causes UI flicker (on→off→on).
+
+**Rule:** Entity actions that change hardware state (light on/off, dial value, etc.) must use optimistic updates instead of `async_request_refresh()`:
+
+```python
+async def async_turn_off(self, **kwargs: Any) -> None:
+    await self._client.set_dial_backlight(self._dial_uid, 0, 0, 0)
+    # Optimistically update coordinator data in-place
+    self._update_coordinator_backlight([0, 0, 0])
+    self.async_write_ha_state()  # Push to UI immediately
+    # The regular polling cycle (30s) will confirm actual hardware state
+```
+
+`async_request_refresh()` is still appropriate for:
+- Service calls in `__init__.py` (no direct entity UI coupling)
+- Name sync (`async_set_dial_name`) where server-side confirmation matters
+- After `provision_new_dials()` to discover new entities
 
 ### Configuration Entity Pattern
 ```python

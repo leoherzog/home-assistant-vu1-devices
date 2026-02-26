@@ -139,7 +139,6 @@ class VU1ConfigEntityBase(CoordinatorEntity):
         try:
             _LOGGER.info("Setting %s easing for %s: period=%d, step=%d", easing_type, self._dial_uid, period, step)
             await api_method(self._dial_uid, period, step)
-            await coordinator.async_request_refresh()
         except Exception as err:
             _LOGGER.error("Failed to set %s easing for %s: %s", easing_type, self._dial_uid, err)
             raise HomeAssistantError(f"Failed to apply {easing_type} easing: {err}")
