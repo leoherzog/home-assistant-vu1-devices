@@ -4,6 +4,7 @@ import logging
 from datetime import timedelta
 from typing import Any, Callable
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -25,12 +26,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         hass: HomeAssistant,
         client: VU1APIClient,
         update_interval: timedelta,
+        config_entry: ConfigEntry,
     ) -> None:
         """Initialize coordinator."""
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
+            config_entry=config_entry,
             update_interval=update_interval,
         )
         self.client = client
@@ -69,8 +72,17 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 
         _LOGGER.debug("Coordinator initial setup completed successfully")
 
+    def _prune_expired_grace_periods(self) -> None:
+        """Remove expired entries from grace period dicts to prevent unbounded growth."""
+        now = dt_util.utcnow()
+        for d in (self._name_change_grace_periods, self._behavior_change_grace_periods):
+            expired = [k for k, v in d.items() if v <= now]
+            for k in expired:
+                del d[k]
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from VU1 server."""
+        self._prune_expired_grace_periods()
         try:
             dials = await self.client.get_dial_list()
 

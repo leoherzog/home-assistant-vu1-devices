@@ -131,7 +131,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
             port = new_port
             hass.config_entries.async_update_entry(entry, data=new_data)
 
-    client = VU1APIClient(host, port, api_key, timeout=timeout)
+    session = async_get_clientsession(hass)
+    client = VU1APIClient(host, port, api_key, session=session, timeout=timeout)
     connection_info = f"{host}:{port}"
     device_identifier = f"vu1_server_{host}_{port}"
 
@@ -142,7 +143,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
         seconds=entry.options.get("update_interval", DEFAULT_UPDATE_INTERVAL)
     )
 
-    coordinator = VU1DataUpdateCoordinator(hass, client, update_interval)
+    coordinator = VU1DataUpdateCoordinator(hass, client, update_interval, config_entry=entry)
     # Store the device identifier string for proper via_device relationships
     coordinator.server_device_identifier = device_identifier
 
@@ -247,15 +248,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool
         await runtime_data.client.close()
 
         if runtime_data.binding_manager:
-            await runtime_data.binding_manager.async_shutdown()
+            # Remove only this entry's bindings, not all bindings (binding manager is shared)
+            coordinator = runtime_data.coordinator
+            if coordinator.data:
+                for dial_uid in list(coordinator.data.get("dials", {}).keys()):
+                    await runtime_data.binding_manager.async_remove_binding(dial_uid)
 
-        # Clean up server device from device registry
-        device_registry = dr.async_get(hass)
-        device = device_registry.async_get_device(
-            identifiers={(DOMAIN, runtime_data.coordinator.server_device_identifier)}
-        )
-        if device:
-            device_registry.async_remove_device(device.id)
+        # HA automatically cleans up devices when their config entry is removed.
+        # Do NOT manually remove devices here — it destroys user customizations
+        # (area, labels, name_by_user) on reload.
 
         # Unregister services and clean up shared managers if this is the last config entry
         remaining_entries = hass.config_entries.async_entries(DOMAIN)
@@ -384,12 +385,12 @@ async def _execute_dial_service(
     """Execute a dial service with common error handling."""
     if not dial_uid or not isinstance(dial_uid, str):
         _LOGGER.error("Invalid dial_uid provided: %s", dial_uid)
-        raise ValueError(f"Invalid dial_uid: {dial_uid}")
-    
+        raise ServiceValidationError(f"Invalid dial_uid: {dial_uid}")
+
     result = _get_dial_client_and_coordinator(hass, dial_uid)
     if not result:
         _LOGGER.error("Dial %s not found", dial_uid)
-        raise ValueError(f"Dial {dial_uid} not found")
+        raise ServiceValidationError(f"Dial {dial_uid} not found")
     
     client, coordinator = result
     try:
@@ -485,7 +486,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         result = _get_dial_client_and_coordinator(hass, dial_uid)
         if not result:
             _LOGGER.error("Dial %s not found for service call", dial_uid)
-            raise ValueError(f"Dial {dial_uid} not found")
+            raise ServiceValidationError(f"Dial {dial_uid} not found")
 
         _client, coordinator = result
 
@@ -504,7 +505,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
         if not media_content_id:
             _LOGGER.error("No media content ID provided for dial image")
-            raise ValueError("Media content ID is required")
+            raise ServiceValidationError("Media content ID is required")
 
         try:
             # Resolve the media source URI to get actual file path/data
@@ -512,7 +513,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             resolved_media = await async_resolve_media(hass, media_content_id, None)
 
             if not resolved_media.url:
-                raise ValueError("Could not resolve media content to URL")
+                raise ServiceValidationError("Could not resolve media content to URL")
 
             # Read the image data from the resolved URL
             if resolved_media.url.startswith("file://"):
@@ -521,7 +522,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
                 # Use async-friendly file operations to avoid blocking the event loop
                 if not await hass.async_add_executor_job(Path(file_path).exists):
-                    raise ValueError(f"Media file not found: {file_path}")
+                    raise ServiceValidationError(f"Media file not found: {file_path}")
 
                 image_data = await hass.async_add_executor_job(Path(file_path).read_bytes)
 
@@ -535,12 +536,12 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 session = async_get_clientsession(hass)
                 async with session.get(resolved_media.url) as response:
                     if response.status != 200:
-                        raise ValueError(f"Failed to fetch media: HTTP {response.status}")
+                        raise HomeAssistantError(f"Failed to fetch media: HTTP {response.status}")
                     image_data = await response.read()
                     content_type = response.headers.get('content-type', 'image/png')
 
             if not image_data:
-                raise ValueError("No image data retrieved from media source")
+                raise HomeAssistantError("No image data retrieved from media source")
 
             _LOGGER.debug("Retrieved image data: %d bytes, content-type: %s", len(image_data), content_type)
 

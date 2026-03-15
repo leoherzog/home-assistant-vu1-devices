@@ -181,9 +181,12 @@ class VU1BacklightLight(VU1DialEntity, CoordinatorEntity, LightEntity):
         """Optimistically update coordinator data with new backlight values."""
         if not self.coordinator.data:
             return
-        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-        detailed_status = dial_data.get("detailed_status", {})
-        detailed_status["backlight"] = {
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid)
+        if dial_data is None:
+            return
+        if "detailed_status" not in dial_data:
+            dial_data["detailed_status"] = {}
+        dial_data["detailed_status"]["backlight"] = {
             "red": color[0],
             "green": color[1],
             "blue": color[2],

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable
 
+from homeassistant.const import Platform
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -35,7 +36,7 @@ DEFAULT_UPDATE_INTERVAL = 30
 DEFAULT_TIMEOUT = 10
 
 # Platforms
-PLATFORMS = ["sensor", "number", "light", "select", "button", "image"]
+PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.LIGHT, Platform.SELECT, Platform.BUTTON, Platform.IMAGE]
 
 # Services
 SERVICE_SET_DIAL_VALUE = "set_dial_value"

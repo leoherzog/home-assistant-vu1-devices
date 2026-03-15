@@ -100,9 +100,11 @@ class VU1DialNumber(VU1DialEntity, CoordinatorEntity, NumberEntity):
             # The VU1 server queues commands and applies them asynchronously,
             # so polling immediately would return stale state.
             if self.coordinator.data:
-                dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-                detailed_status = dial_data.get("detailed_status", {})
-                detailed_status["value"] = int(value)
+                dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid)
+                if dial_data is not None:
+                    if "detailed_status" not in dial_data:
+                        dial_data["detailed_status"] = {}
+                    dial_data["detailed_status"]["value"] = int(value)
             self.async_write_ha_state()
         except Exception as err:
             _LOGGER.error("Failed to set dial value for %s: %s", self._dial_uid, err)

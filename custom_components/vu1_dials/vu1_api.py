@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import re
 from typing import Any
 
 import aiohttp
@@ -9,7 +10,7 @@ from aiohttp import ClientError, ClientTimeout
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["VU1APIClient", "VU1APIError", "VU1ConnectionError", "VU1AuthError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT"]
+__all__ = ["VU1APIClient", "VU1APIError", "VU1ConnectionError", "VU1AuthError", "VU1DialOfflineError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT", "API_VERSION"]
 
 DEFAULT_PORT = 5340
 DEFAULT_TIMEOUT = 10
@@ -25,6 +26,13 @@ class VU1ConnectionError(VU1APIError):
 
 class VU1AuthError(VU1APIError):
     """Exception raised for authentication errors (401/403)."""
+
+
+class VU1DialOfflineError(VU1APIError):
+    """Exception raised when a dial is offline (HTTP 503)."""
+
+
+API_VERSION = "v0"
 
 
 class VU1APIClient:
@@ -55,7 +63,7 @@ class VU1APIClient:
     @property
     def session(self) -> aiohttp.ClientSession:
         """Get aiohttp session."""
-        if self._session is None:
+        if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 timeout=ClientTimeout(total=self.timeout)
             )
@@ -66,6 +74,7 @@ class VU1APIClient:
         """Close the session."""
         if self._session and self._close_session:
             await self._session.close()
+            self._session = None
 
     def _prepare_auth_headers_and_params(self, endpoint: str, params: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
         """Prepare authentication headers and parameters for API requests.
@@ -126,21 +135,25 @@ class VU1APIClient:
                     return {"data": await response.read()}
                     
         except aiohttp.ClientResponseError as err:
-            if err.status == 401:
-                raise VU1AuthError("Authentication failed: Invalid API key") from err
-            elif err.status == 403:
-                raise VU1AuthError("Access forbidden: Invalid API key") from err
-            else:
-                raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
+            self._raise_for_status(err)
         except (ClientError, asyncio.TimeoutError) as err:
             raise VU1ConnectionError(f"Connection error: {err}") from err
+
+    @staticmethod
+    def _raise_for_status(err: aiohttp.ClientResponseError) -> None:
+        """Convert aiohttp response errors to VU1 exception hierarchy."""
+        if err.status in (401, 403):
+            raise VU1AuthError(f"Authentication failed: {err.message}") from err
+        if err.status == 503:
+            raise VU1DialOfflineError(f"Dial offline or unavailable: {err.message}") from err
+        raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
 
     async def test_connection(self) -> dict[str, Any]:
         """Test connection and API key, returning detailed status."""
         _LOGGER.debug("Testing connection to VU1 server at %s", self.base_url)
         try:
             # Use dial list endpoint which requires valid auth to test both connectivity and API key
-            response = await self._request("GET", "api/v0/dial/list")
+            response = await self._request("GET", f"api/{API_VERSION}/dial/list")
             _LOGGER.debug("Connection and authentication successful.")
             return {
                 "connected": True,
@@ -178,7 +191,7 @@ class VU1APIClient:
 
     async def get_dial_list(self) -> list[dict[str, Any]]:
         """Get list of available dials."""
-        response = await self._request("GET", "api/v0/dial/list")
+        response = await self._request("GET", f"api/{API_VERSION}/dial/list")
         return response.get("data", [])
 
     async def set_dial_value(self, dial_uid: str, value: int) -> None:
@@ -187,40 +200,47 @@ class VU1APIClient:
         if not 0 <= value <= 100:
             raise ValueError("Value must be between 0 and 100")
         
-        await self._request("GET", f"api/v0/dial/{dial_uid}/set", {"value": value})
+        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/set", {"value": value})
 
     async def set_dial_backlight(
-        self, dial_uid: str, red: int, green: int, blue: int
+        self, dial_uid: str, red: int, green: int, blue: int, white: int = 0
     ) -> None:
-        """Set dial backlight RGB values (0-100 each)."""
+        """Set dial backlight RGBW values (0-100 each)."""
         self._validate_dial_uid(dial_uid)
-        for color, val in [("red", red), ("green", green), ("blue", blue)]:
+        for color, val in [("red", red), ("green", green), ("blue", blue), ("white", white)]:
             if not 0 <= val <= 100:
                 raise ValueError(f"{color} value must be between 0 and 100")
-        
+
         await self._request(
             "GET",
-            f"api/v0/dial/{dial_uid}/backlight",
-            {"red": red, "green": green, "blue": blue},
+            f"api/{API_VERSION}/dial/{dial_uid}/backlight",
+            {"red": red, "green": green, "blue": blue, "white": white},
         )
 
     async def get_dial_status(self, dial_uid: str) -> dict[str, Any]:
         """Get dial status."""
         self._validate_dial_uid(dial_uid)
-        response = await self._request("GET", f"api/v0/dial/{dial_uid}/status")
+        response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/status")
         return response.get("data", {})
 
     async def set_dial_name(self, dial_uid: str, name: str) -> None:
-        """Set dial name."""
+        """Set dial name.
+
+        Server requires 3-30 characters, only [a-z0-9\\-_ ] allowed.
+        """
         self._validate_dial_uid(dial_uid)
         if not name or not isinstance(name, str):
             raise ValueError("name must be a non-empty string")
-        await self._request("GET", f"api/v0/dial/{dial_uid}/name", {"name": name})
+        if not 3 <= len(name) <= 30:
+            raise ValueError(f"name must be 3-30 characters, got {len(name)}")
+        if not re.match(r'^[a-z0-9\-_ ]+$', name, re.IGNORECASE):
+            raise ValueError("name may only contain letters, digits, hyphens, underscores, and spaces")
+        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/name", {"name": name})
 
     async def get_dial_image(self, dial_uid: str) -> bytes:
         """Get dial background image."""
         self._validate_dial_uid(dial_uid)
-        response = await self._request("GET", f"api/v0/dial/{dial_uid}/image/get")
+        response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/image/get")
         return response.get("data", b"")
 
     async def set_dial_image(self, dial_uid: str, image_data: bytes, content_type: str = "image/png") -> None:
@@ -229,8 +249,8 @@ class VU1APIClient:
         if not image_data:
             raise ValueError("image_data cannot be empty")
         
-        url = f"{self.base_url}/api/v0/dial/{dial_uid}/image/set"
-        headers, params = self._prepare_auth_headers_and_params(f"api/v0/dial/{dial_uid}/image/set")
+        url = f"{self.base_url}/api/{API_VERSION}/dial/{dial_uid}/image/set"
+        headers, params = self._prepare_auth_headers_and_params(f"api/{API_VERSION}/dial/{dial_uid}/image/set")
         
         # Create multipart form data
         form_data = aiohttp.FormData()
@@ -258,34 +278,29 @@ class VU1APIClient:
                 _LOGGER.debug("Successfully uploaded image to dial %s", dial_uid)
                     
         except aiohttp.ClientResponseError as err:
-            if err.status == 401:
-                raise VU1AuthError("Authentication failed: Invalid API key") from err
-            elif err.status == 403:
-                raise VU1AuthError("Access forbidden: Invalid API key") from err
-            else:
-                raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
+            self._raise_for_status(err)
         except (ClientError, asyncio.TimeoutError) as err:
             raise VU1ConnectionError(f"Connection error: {err}") from err
 
     async def reload_dial(self, dial_uid: str) -> None:
         """Reload dial configuration."""
         self._validate_dial_uid(dial_uid)
-        await self._request("GET", f"api/v0/dial/{dial_uid}/reload")
+        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/reload")
 
     async def calibrate_dial(self, dial_uid: str, value: int = 1024) -> None:
         """Calibrate dial to specific value."""
         self._validate_dial_uid(dial_uid)
-        await self._request("GET", f"api/v0/dial/{dial_uid}/calibrate", {"value": value})
+        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/calibrate", {"value": value})
 
     async def set_dial_easing(self, dial_uid: str, period: int, step: int) -> None:
         """Set dial easing configuration."""
         self._validate_dial_uid(dial_uid)
-        await self._request("GET", f"api/v0/dial/{dial_uid}/easing/dial", {"period": period, "step": step})
+        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/easing/dial", {"period": period, "step": step})
 
     async def set_backlight_easing(self, dial_uid: str, period: int, step: int) -> None:
         """Set backlight easing configuration."""
         self._validate_dial_uid(dial_uid)
-        await self._request("GET", f"api/v0/dial/{dial_uid}/easing/backlight", {"period": period, "step": step})
+        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/easing/backlight", {"period": period, "step": step})
 
 
     async def provision_new_dials(self) -> dict[str, Any]:
@@ -294,7 +309,7 @@ class VU1APIClient:
         Requires the master key (admin privileges). Regular API keys will fail.
         """
         try:
-            response = await self._request("GET", "api/v0/dial/provision", {"admin_key": self.api_key})
+            response = await self._request("GET", f"api/{API_VERSION}/dial/provision", {"admin_key": self.api_key})
             return response.get("data", {})
         except VU1AuthError as err:
             raise VU1AuthError(

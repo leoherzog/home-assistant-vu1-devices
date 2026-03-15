@@ -68,8 +68,14 @@ class VU1ConfigEntityBase(CoordinatorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
+        # Use live coordinator data instead of stale _dial_data snapshot
+        dial_data = (
+            self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+            if self.coordinator.data
+            else self._dial_data
+        )
         return get_dial_device_info(
-            self._dial_uid, self._dial_data, self.coordinator.server_device_identifier
+            self._dial_uid, dial_data, self.coordinator.server_device_identifier
         )
 
     async def _update_config(self, **config_updates) -> None:

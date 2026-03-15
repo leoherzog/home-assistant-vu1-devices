@@ -130,6 +130,8 @@ class VU1BehaviorSelect(VU1DialEntity, CoordinatorEntity, SelectEntity):
         result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
         if result:
             client, coordinator = result
+            # Mark grace period to prevent sync loops
+            coordinator.mark_behavior_change_from_ha(self._dial_uid)
             try:
                 # Apply dial easing
                 await client.set_dial_easing(

@@ -61,6 +61,7 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
         """Return if entity is available."""
         return (
             self.coordinator.last_update_success
+            and self.coordinator.data is not None
             and self._dial_uid in self.coordinator.data.get("dials", {})
         )
 

@@ -143,6 +143,7 @@ class VU1RefreshHardwareInfoButton(VU1DialEntity, CoordinatorEntity, ButtonEntit
         """Return if entity is available."""
         return (
             self.coordinator.last_update_success
+            and self.coordinator.data is not None
             and self._dial_uid in self.coordinator.data.get("dials", {})
         )
 
@@ -162,7 +163,7 @@ class VU1IdentifyDialButton(VU1DialEntity, CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:lightbulb-on"
 
     async def async_press(self) -> None:
-        """Handle the button press - perform identify animation."""
+        """Handle the button press - perform identify animation in background."""
         # Get current backlight state to restore later
         original_backlight = None
         if self.coordinator.data:
@@ -170,52 +171,47 @@ class VU1IdentifyDialButton(VU1DialEntity, CoordinatorEntity, ButtonEntity):
             detailed_status = dial_data.get("detailed_status", {})
             original_backlight = detailed_status.get("backlight", {})
 
-        try:
-            _LOGGER.info("Starting identify animation for dial %s", self._dial_uid)
+        async def _run_identify() -> None:
+            try:
+                _LOGGER.info("Starting identify animation for dial %s", self._dial_uid)
 
-            # Flash sequence: white for 1s, off for 1s, then restore
-            # Step 1: Set to 100% white
-            await self._client.set_dial_backlight(self._dial_uid, 100, 100, 100)
-            await asyncio.sleep(1.0)
-
-            # Step 2: Turn off (0% all colors)
-            await self._client.set_dial_backlight(self._dial_uid, 0, 0, 0)
-            await asyncio.sleep(1.0)
-
-            # Step 3: Restore original state
-            if original_backlight:
-                red = original_backlight.get("red", 0)
-                green = original_backlight.get("green", 0)
-                blue = original_backlight.get("blue", 0)
-                await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
-            else:
-                # Default to off if no original state
+                # Flash sequence: white for 1s, off for 1s, then restore
+                await self._client.set_dial_backlight(self._dial_uid, 100, 100, 100)
+                await asyncio.sleep(1.0)
                 await self._client.set_dial_backlight(self._dial_uid, 0, 0, 0)
+                await asyncio.sleep(1.0)
 
-            # Refresh coordinator to update UI state
-            await asyncio.sleep(0.1)  # Small delay for hardware to settle
-            await self.coordinator.async_request_refresh()
-
-            _LOGGER.info("Completed identify animation for dial %s", self._dial_uid)
-
-        except Exception as err:
-            _LOGGER.error("Failed to perform identify animation for dial %s: %s", self._dial_uid, err)
-            # Try to restore original state on error
-            if original_backlight:
-                try:
+                # Restore original state
+                if original_backlight:
                     red = original_backlight.get("red", 0)
                     green = original_backlight.get("green", 0)
                     blue = original_backlight.get("blue", 0)
                     await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
-                    await self.coordinator.async_request_refresh()
-                except Exception:
-                    _LOGGER.error("Failed to restore original backlight state for dial %s", self._dial_uid)
-            raise
+                else:
+                    await self._client.set_dial_backlight(self._dial_uid, 0, 0, 0)
+
+                await self.coordinator.async_request_refresh()
+                _LOGGER.info("Completed identify animation for dial %s", self._dial_uid)
+
+            except Exception as err:
+                _LOGGER.error("Failed to perform identify animation for dial %s: %s", self._dial_uid, err)
+                if original_backlight:
+                    try:
+                        red = original_backlight.get("red", 0)
+                        green = original_backlight.get("green", 0)
+                        blue = original_backlight.get("blue", 0)
+                        await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
+                        await self.coordinator.async_request_refresh()
+                    except Exception:
+                        _LOGGER.error("Failed to restore original backlight state for dial %s", self._dial_uid)
+
+        self.hass.async_create_task(_run_identify())
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
         return (
             self.coordinator.last_update_success
+            and self.coordinator.data is not None
             and self._dial_uid in self.coordinator.data.get("dials", {})
         )

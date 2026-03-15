@@ -1,4 +1,5 @@
 """Device configuration support for VU1 dials."""
+import asyncio
 import logging
 from typing import Any
 
@@ -42,6 +43,8 @@ class VU1DialConfigManager:
         self._configs: dict[str, dict[str, Any]] = {}
         # Event listeners for config changes: dial_uid -> [listener_functions]
         self._listeners: dict[str, list] = {}
+        # Protect read-merge-write from concurrent updates
+        self._update_lock = asyncio.Lock()
 
     async def async_load(self) -> None:
         """Load configurations from storage."""
@@ -61,20 +64,21 @@ class VU1DialConfigManager:
         self, dial_uid: str, config: dict[str, Any]
     ) -> None:
         """Update configuration for a dial."""
-        # Get the existing configuration (includes defaults)
-        existing_config = self.get_dial_config(dial_uid)
-        
-        # Merge new settings with existing config
-        merged_config = {**existing_config, **config}
-        
-        # Validate and sanitize the merged configuration
-        validated_config = self._validate_config(merged_config)
-        
-        # Store in memory cache and persist to disk
-        self._configs[dial_uid] = validated_config
-        await self.async_save()
-        
-        # Notify listeners (entities, binding manager) of changes
+        async with self._update_lock:
+            # Get the existing configuration (includes defaults)
+            existing_config = self.get_dial_config(dial_uid)
+
+            # Merge new settings with existing config
+            merged_config = {**existing_config, **config}
+
+            # Validate and sanitize the merged configuration
+            validated_config = self._validate_config(merged_config)
+
+            # Store in memory cache and persist to disk
+            self._configs[dial_uid] = validated_config
+            await self.async_save()
+
+        # Notify listeners outside the lock to avoid deadlocks
         await self._notify_listeners(dial_uid, validated_config)
 
     def _get_default_config(self) -> dict[str, Any]:
@@ -163,14 +167,18 @@ class VU1DialConfigManager:
     def async_remove_listener(self, dial_uid: str, listener) -> None:
         """Remove a listener for dial configuration changes."""
         if dial_uid in self._listeners:
-            self._listeners[dial_uid].remove(listener)
+            try:
+                self._listeners[dial_uid].remove(listener)
+            except ValueError:
+                return  # Already removed
             if not self._listeners[dial_uid]:
                 del self._listeners[dial_uid]
 
     async def _notify_listeners(self, dial_uid: str, config: dict[str, Any]) -> None:
         """Notify listeners of configuration changes."""
         if dial_uid in self._listeners:
-            for listener in self._listeners[dial_uid]:
+            # Iterate over a copy — callbacks may remove themselves during iteration
+            for listener in list(self._listeners.get(dial_uid, [])):
                 try:
                     await listener(dial_uid, config)
                 except Exception as err:

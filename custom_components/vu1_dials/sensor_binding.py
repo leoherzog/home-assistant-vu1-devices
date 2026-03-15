@@ -35,7 +35,7 @@ class VU1SensorBindingManager:
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the binding manager."""
         self.hass = hass
-        # Track active bindings: dial_uid -> {entity_id, config, dial_data, client, last_state}
+        # Track active bindings: dial_uid -> {entity_id, config, dial_data, last_state}
         self._bindings: dict[str, dict[str, Any]] = {}
         # Track state change listeners with reference counting:
         # entity_id -> {"unsub": unsubscribe_callable, "count": number_of_dials_using_it}
@@ -118,12 +118,11 @@ class VU1SensorBindingManager:
             existing_debouncer.async_cancel()
             del self._debouncers[dial_uid]
 
-        # Store binding info
+        # Store binding info (no client cached — always look up fresh to avoid stale refs)
         self._bindings[dial_uid] = {
             "entity_id": entity_id,
             "config": config.copy(),
             "dial_data": dial_data.copy(),
-            "client": client,
             "last_state": None,  # Store the most recent state for debounced processing
         }
 
@@ -225,8 +224,12 @@ class VU1SensorBindingManager:
             return
 
         config = binding_info["config"]
-        client = binding_info["client"]
-        
+        # Always get a fresh client reference to avoid stale refs after config entry reload
+        client = self._get_client_for_dial(dial_uid)
+        if not client:
+            _LOGGER.warning("No client available for dial %s, skipping sensor update", dial_uid)
+            return
+
         try:
             # Parse numeric value from sensor state
             sensor_value = self._parse_sensor_value(state)
@@ -331,17 +334,9 @@ class VU1SensorBindingManager:
         await self._update_binding(dial_uid, config, dial_data)
         _LOGGER.info("Reconfigured binding for dial %s", dial_uid)
 
-    async def async_shutdown(self) -> None:
-        """Shutdown the binding manager."""
-        # Cancel all debouncers
-        for debouncer in self._debouncers.values():
-            if debouncer:
-                debouncer.async_cancel()
-        
-        # Remove all bindings
-        dial_uids = list(self._bindings.keys())
-        for dial_uid in dial_uids:
-            await self._remove_binding(dial_uid)
+    async def async_remove_binding(self, dial_uid: str) -> None:
+        """Public interface for removing a single dial's binding."""
+        await self._remove_binding(dial_uid)
 
 
 @callback
