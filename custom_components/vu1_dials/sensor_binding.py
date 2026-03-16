@@ -131,7 +131,7 @@ class VU1SensorBindingManager:
             self.hass,
             _LOGGER,
             cooldown=DEBOUNCE_SECONDS,
-            immediate=False,
+            immediate=True,
             # Bind the dial_uid to the function using partial
             function=functools.partial(self._apply_sensor_value, dial_uid),
         )
@@ -159,6 +159,16 @@ class VU1SensorBindingManager:
         initial_state = self.hass.states.get(entity_id)
         if initial_state:
             await self._apply_sensor_value_from_state(dial_uid, initial_state)
+
+        # Apply saved backlight color once during binding creation
+        backlight_color = config.get(CONF_BACKLIGHT_COLOR)
+        if backlight_color and client:
+            try:
+                await client.set_dial_backlight(
+                    dial_uid, backlight_color[0], backlight_color[1], backlight_color[2]
+                )
+            except VU1APIError as err:
+                _LOGGER.error("Failed to set initial backlight for dial %s: %s", dial_uid, err)
 
     async def _remove_binding(self, dial_uid: str) -> None:
         """Remove a sensor binding."""
@@ -241,14 +251,7 @@ class VU1SensorBindingManager:
             
             # Update dial position
             await client.set_dial_value(dial_uid, dial_value)
-            
-            # Apply saved backlight color if configured
-            backlight_color = config.get(CONF_BACKLIGHT_COLOR)
-            if backlight_color:
-                await client.set_dial_backlight(
-                    dial_uid, backlight_color[0], backlight_color[1], backlight_color[2]
-                )
-            
+
             _LOGGER.debug(
                 "Applied sensor value %s -> dial %s (value: %s)",
                 sensor_value, dial_uid, dial_value

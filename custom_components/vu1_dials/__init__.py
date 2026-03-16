@@ -1,6 +1,7 @@
 """The VU1 Dials integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 from dataclasses import dataclass
@@ -412,20 +413,41 @@ async def _execute_dial_service_for_all(
     api_call_factory,
     refresh: bool = True,
 ) -> None:
-    """Execute a dial service across multiple dials, collecting errors.
+    """Execute a dial service across multiple dials concurrently.
 
-    Attempts every dial even if some fail. Raises a single
-    HomeAssistantError at the end listing which dials failed.
+    Fires all API calls in parallel, then performs a single coordinator
+    refresh per unique coordinator (instead of one per dial).
+    Raises a single HomeAssistantError listing which dials failed.
     """
+    # Fire all API calls concurrently, suppressing per-dial refresh
+    tasks = [
+        _execute_dial_service(
+            hass, uid, action_name,
+            api_call_factory(uid), refresh=False,
+        )
+        for uid in dial_uids
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Collect errors
     errors: dict[str, Exception] = {}
-    for dial_uid in dial_uids:
-        try:
-            await _execute_dial_service(
-                hass, dial_uid, action_name,
-                api_call_factory(dial_uid), refresh=refresh,
-            )
-        except Exception as err:  # noqa: BLE001
-            errors[dial_uid] = err
+    for uid, result in zip(dial_uids, results):
+        if isinstance(result, Exception):
+            errors[uid] = result
+
+    # Single refresh per unique coordinator after all API calls complete
+    if refresh:
+        refreshed: set[int] = set()
+        for uid in dial_uids:
+            if uid in errors:
+                continue
+            pair = _get_dial_client_and_coordinator(hass, uid)
+            if pair:
+                _, coordinator = pair
+                coord_id = id(coordinator)
+                if coord_id not in refreshed:
+                    refreshed.add(coord_id)
+                    await coordinator.async_request_refresh()
 
     if errors:
         failed = ", ".join(f"{uid}: {err}" for uid, err in errors.items())
