@@ -1,0 +1,76 @@
+{
+  "entity": {
+    "number": {
+      "value_min": {
+        "default": "mdi:numeric"
+      },
+      "value_max": {
+        "default": "mdi:numeric"
+      },
+      "dial_easing_period": {
+        "default": "mdi:timer"
+      },
+      "dial_easing_step": {
+        "default": "mdi:stairs"
+      },
+      "backlight_easing_period": {
+        "default": "mdi:timer"
+      },
+      "backlight_easing_step": {
+        "default": "mdi:stairs"
+      }
+    },
+    "sensor": {
+      "value": {
+        "default": "mdi:gauge"
+      },
+      "update_mode": {
+        "default": "mdi:update"
+      },
+      "bound_entity": {
+        "default": "mdi:link"
+      },
+      "server_name": {
+        "default": "mdi:rename"
+      },
+      "firmware_version": {
+        "default": "mdi:chip"
+      },
+      "hardware_version": {
+        "default": "mdi:developer-board"
+      },
+      "protocol_version": {
+        "default": "mdi:api"
+      },
+      "firmware_hash": {
+        "default": "mdi:fingerprint"
+      }
+    },
+    "light": {
+      "backlight": {
+        "default": "mdi:palette"
+      }
+    },
+    "select": {
+      "behavior_preset": {
+        "default": "mdi:tune"
+      }
+    },
+    "button": {
+      "provision_new_dials": {
+        "default": "mdi:plus-circle"
+      },
+      "refresh_hardware_info": {
+        "default": "mdi:refresh"
+      },
+      "identify": {
+        "default": "mdi:lightbulb-on"
+      }
+    },
+    "image": {
+      "background_image": {
+        "default": "mdi:image"
+      }
+    }
+  }
+}

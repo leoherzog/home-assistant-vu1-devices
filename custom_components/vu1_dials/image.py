@@ -49,21 +49,11 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
         self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{dial_uid}_background_image"
-        self._attr_name = "Background image"
-        self._attr_has_entity_name = True
-        self._attr_icon = "mdi:image"
+        self._attr_translation_key = "background_image"
         self._cached_image: bytes | None = None
         self._last_image_file: str | None = None
         self._image_last_updated: datetime | None = None
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return (
-            self.coordinator.last_update_success
-            and self.coordinator.data is not None
-            and self._dial_uid in self.coordinator.data.get("dials", {})
-        )
+        self._content_type: str | None = None
 
     async def async_image(self) -> bytes | None:
         """Return the current dial background image."""
@@ -89,6 +79,7 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
                     self._cached_image = image_data
                     self._last_image_file = current_image_file
                     self._image_last_updated = dt_util.utcnow()
+                    self._content_type = self._sniff_content_type(image_data)
                     _LOGGER.debug("Successfully fetched image for dial %s (%d bytes)",
                                 self._dial_uid, len(image_data))
                 else:
@@ -119,12 +110,18 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
         detailed_status = dial_data.get("detailed_status", {})
         return detailed_status.get("image_file")
 
+    @staticmethod
+    def _sniff_content_type(image_data: bytes) -> str:
+        """Determine the image content type from its magic bytes."""
+        if image_data.startswith(b"\xff\xd8"):
+            return "image/jpeg"
+        # PNG signature, and the safe default for VU1 dial faces.
+        return "image/png"
+
     @property
     def content_type(self) -> str:
         """Return the content type of the image."""
-        # VU1 dials support PNG and JPEG, but we'll default to PNG
-        # The actual content type could be determined from the image data
-        return "image/png"
+        return self._content_type or "image/png"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -169,14 +166,16 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
                 _LOGGER.debug("Server indicates image changed for dial %s, clearing cache", self._dial_uid)
                 self._cached_image = None
                 self._last_image_file = None
-                self._image_last_updated = None
+                # Signal a fresh image (not None, which would read as unknown)
+                # so picture cards refetch instead of showing a broken image.
+                self._image_last_updated = dt_util.utcnow()
 
             # Also check if image file path changed
             current_image_file = self._get_current_image_file()
             if current_image_file and current_image_file != self._last_image_file:
                 _LOGGER.debug("Image file path changed for dial %s, clearing cache", self._dial_uid)
                 self._cached_image = None
-                self._image_last_updated = None
+                self._image_last_updated = dt_util.utcnow()
 
         # Call parent to trigger state update
         super()._handle_coordinator_update()

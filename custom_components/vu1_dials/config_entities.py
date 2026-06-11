@@ -1,15 +1,16 @@
 """Configuration entities for VU1 dials."""
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.number import NumberEntity
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import get_dial_device_info
+from .const import VU1DialEntity
 from .device_config import async_get_config_manager
 from .sensor_binding import async_get_binding_manager
 
@@ -17,28 +18,29 @@ _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "VU1ConfigEntityBase",
-    "VU1ValueMinNumber",
-    "VU1ValueMaxNumber",
-    "VU1DialEasingPeriodNumber",
-    "VU1DialEasingStepNumber",
-    "VU1BacklightEasingPeriodNumber",
-    "VU1BacklightEasingStepNumber",
+    "VU1ConfigNumber",
+    "CONFIG_NUMBER_DESCRIPTIONS",
     "VU1UpdateModeSensor",
     "VU1BoundEntitySensor",
 ]
 
 
-class VU1ConfigEntityBase(CoordinatorEntity):
-    """Base class for VU1 configuration entities."""
+class VU1ConfigEntityBase(VU1DialEntity, CoordinatorEntity):
+    """Base class for VU1 configuration entities.
+
+    Inherits ``device_info`` and ``available`` from the ``VU1DialEntity``
+    mixin (the canonical source per AGENTS.md); ``VU1DialEntity`` precedes
+    ``CoordinatorEntity`` in the MRO so the mixin's ``super()`` calls resolve
+    to ``CoordinatorEntity``.
+    """
 
     def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
         """Initialize the config entity."""
         super().__init__(coordinator)
         self._dial_uid = dial_uid
-        self._dial_data = dial_data
         self._config_manager = async_get_config_manager(coordinator.hass)
         self._attr_entity_category = EntityCategory.CONFIG
-        self._attr_has_entity_name = True
+        # _attr_has_entity_name is inherited from VU1DialEntity.
 
     async def async_added_to_hass(self) -> None:
         """Register for configuration change notifications."""
@@ -64,19 +66,6 @@ class VU1ConfigEntityBase(CoordinatorEntity):
     async def _sync_from_config(self) -> None:
         """Sync entity state from configuration. Override in subclasses."""
         pass
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        # Use live coordinator data instead of stale _dial_data snapshot
-        dial_data = (
-            self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
-            if self.coordinator.data
-            else self._dial_data
-        )
-        return get_dial_device_info(
-            self._dial_uid, dial_data, self.coordinator.server_device_identifier
-        )
 
     async def _update_config(self, **config_updates) -> None:
         """Update dial configuration with optimized sensor binding handling."""
@@ -149,283 +138,167 @@ class VU1ConfigEntityBase(CoordinatorEntity):
             _LOGGER.error("Failed to set %s easing for %s: %s", easing_type, self._dial_uid, err)
             raise HomeAssistantError(f"Failed to apply {easing_type} easing: {err}")
 
-class VU1ValueMinNumber(VU1ConfigEntityBase, NumberEntity):
-    """Number entity for minimum value."""
+@dataclass(frozen=True, kw_only=True)
+class VU1ConfigNumberDescription:
+    """Describes a per-dial configuration number entity."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the value min number."""
+    key: str
+    name: str
+    icon: str
+    native_min_value: float
+    native_max_value: float
+    native_step: float
+    default: float
+    cast: Callable[[float], float]
+    native_unit_of_measurement: str | None = None
+    easing_type: str | None = None
+    easing_param: str | None = None
+
+
+CONFIG_NUMBER_DESCRIPTIONS: tuple[VU1ConfigNumberDescription, ...] = (
+    VU1ConfigNumberDescription(
+        key="value_min",
+        name="Value range minimum",
+        icon="mdi:numeric",
+        native_min_value=-1000,
+        native_max_value=1000,
+        native_step=0.1,
+        default=0,
+        cast=float,
+    ),
+    VU1ConfigNumberDescription(
+        key="value_max",
+        name="Value range maximum",
+        icon="mdi:numeric",
+        native_min_value=-1000,
+        native_max_value=1000,
+        native_step=0.1,
+        default=100,
+        cast=float,
+    ),
+    VU1ConfigNumberDescription(
+        key="dial_easing_period",
+        name="Dial easing period",
+        icon="mdi:timer",
+        native_min_value=10,
+        native_max_value=1000,
+        native_step=10,
+        native_unit_of_measurement="ms",
+        default=50,
+        cast=int,
+        easing_type="dial",
+        easing_param="period",
+    ),
+    VU1ConfigNumberDescription(
+        key="dial_easing_step",
+        name="Dial easing step",
+        icon="mdi:stairs",
+        native_min_value=1,
+        native_max_value=100,
+        native_step=1,
+        native_unit_of_measurement="%",
+        default=5,
+        cast=int,
+        easing_type="dial",
+        easing_param="step",
+    ),
+    VU1ConfigNumberDescription(
+        key="backlight_easing_period",
+        name="Backlight easing period",
+        icon="mdi:timer",
+        native_min_value=10,
+        native_max_value=1000,
+        native_step=10,
+        native_unit_of_measurement="ms",
+        default=50,
+        cast=int,
+        easing_type="backlight",
+        easing_param="period",
+    ),
+    VU1ConfigNumberDescription(
+        key="backlight_easing_step",
+        name="Backlight easing step",
+        icon="mdi:stairs",
+        native_min_value=1,
+        native_max_value=100,
+        native_step=1,
+        native_unit_of_measurement="%",
+        default=5,
+        cast=int,
+        easing_type="backlight",
+        easing_param="step",
+    ),
+)
+
+
+class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
+    """Per-dial configuration number entity driven by a description.
+
+    Consolidates the six former classes (value min/max and the four easing
+    period/step numbers). Unique-id suffixes and float-vs-int casting are
+    preserved exactly via the description's ``key`` and ``cast`` fields.
+    """
+
+    def __init__(
+        self,
+        coordinator,
+        dial_uid: str,
+        dial_data: dict[str, Any],
+        description: VU1ConfigNumberDescription,
+    ) -> None:
+        """Initialize the configuration number."""
         super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_value_min"
-        self._attr_name = "Value range minimum"
-        self._attr_icon = "mdi:numeric"
-        self._attr_native_min_value = -1000
-        self._attr_native_max_value = 1000
-        self._attr_native_step = 0.1
+        self._description = description
+        self._attr_unique_id = f"{dial_uid}_{description.key}"
+        # translation_key derives from the description key; the entity name comes
+        # from strings.json / translations under entity.number.<key>.name. The
+        # icon now lives in icons.json (entity.number.<key>.default).
+        self._attr_translation_key = description.key
+        self._attr_native_min_value = description.native_min_value
+        self._attr_native_max_value = description.native_max_value
+        self._attr_native_step = description.native_step
+        if description.native_unit_of_measurement is not None:
+            self._attr_native_unit_of_measurement = description.native_unit_of_measurement
         # Initialize with current config value
         config = self._config_manager.get_dial_config(dial_uid)
-        self._attr_native_value = config.get("value_min", 0)
+        self._attr_native_value = config.get(description.key, description.default)
 
     async def _sync_from_config(self) -> None:
         """Sync from configuration."""
         config = self._config_manager.get_dial_config(self._dial_uid)
-        self._attr_native_value = config.get("value_min", 0)
+        self._attr_native_value = config.get(
+            self._description.key, self._description.default
+        )
 
     @property
-    def native_value(self) -> float:
+    def native_value(self) -> float | None:
         """Return the current value."""
         return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
-        # Store old value for rollback
         old_value = self._attr_native_value
-        
+        new_value = self._description.cast(value)
+
         # Immediately update local state for responsive UI
-        self._attr_native_value = value
+        self._attr_native_value = new_value
         self.async_write_ha_state()
-        
+
         try:
-            # Save to configuration
-            await self._update_config(value_min=value)
+            # Easing numbers apply to hardware first, then persist on success.
+            if self._description.easing_type is not None:
+                await self._apply_easing_config_to_server(
+                    self._description.easing_type,
+                    **{f"new_{self._description.easing_param}": new_value},
+                )
+            await self._update_config(**{self._description.key: new_value})
         except Exception as err:
             # Rollback on error
             self._attr_native_value = old_value
             self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to update value range minimum: {err}")
-
-class VU1ValueMaxNumber(VU1ConfigEntityBase, NumberEntity):
-    """Number entity for maximum value."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the value max number."""
-        super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_value_max"
-        self._attr_name = "Value range maximum"
-        self._attr_icon = "mdi:numeric"
-        self._attr_native_min_value = -1000
-        self._attr_native_max_value = 1000
-        self._attr_native_step = 0.1
-        # Initialize with current config value
-        config = self._config_manager.get_dial_config(dial_uid)
-        self._attr_native_value = config.get("value_max", 100)
-
-    async def _sync_from_config(self) -> None:
-        """Sync from configuration."""
-        config = self._config_manager.get_dial_config(self._dial_uid)
-        self._attr_native_value = config.get("value_max", 100)
-
-    @property
-    def native_value(self) -> float:
-        """Return the current value."""
-        return self._attr_native_value
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Update the value."""
-        # Store old value for rollback
-        old_value = self._attr_native_value
-        
-        # Immediately update local state for responsive UI
-        self._attr_native_value = value
-        self.async_write_ha_state()
-        
-        try:
-            # Save to configuration
-            await self._update_config(value_max=value)
-        except Exception as err:
-            # Rollback on error
-            self._attr_native_value = old_value
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to update value range maximum: {err}")
-
-class VU1DialEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
-    """Number entity for dial easing period."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the dial easing period number."""
-        super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_dial_easing_period"
-        self._attr_name = "Dial easing period"
-        self._attr_icon = "mdi:timer"
-        self._attr_native_min_value = 10
-        self._attr_native_max_value = 1000
-        self._attr_native_step = 10
-        self._attr_native_unit_of_measurement = "ms"
-        # Initialize with current config value
-        config = self._config_manager.get_dial_config(dial_uid)
-        self._attr_native_value = config.get("dial_easing_period", 50)
-
-    async def _sync_from_config(self) -> None:
-        """Sync from configuration."""
-        config = self._config_manager.get_dial_config(self._dial_uid)
-        self._attr_native_value = config.get("dial_easing_period", 50)
-
-    @property
-    def native_value(self) -> int:
-        """Return the current value."""
-        return self._attr_native_value
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Update the value."""
-        # Store old value for rollback
-        old_value = self._attr_native_value
-        
-        # Immediately update local state for responsive UI
-        self._attr_native_value = int(value)
-        self.async_write_ha_state()
-        
-        try:
-            # Apply to hardware first
-            await self._apply_easing_config_to_server("dial", new_period=int(value))
-            # If successful, save config
-            await self._update_config(dial_easing_period=int(value))
-        except Exception as err:
-            # Rollback on error
-            self._attr_native_value = old_value
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to update dial easing period: {err}")
-
-
-class VU1DialEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
-    """Number entity for dial easing step."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the dial easing step number."""
-        super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_dial_easing_step"
-        self._attr_name = "Dial easing step"
-        self._attr_icon = "mdi:stairs"
-        self._attr_native_min_value = 1
-        self._attr_native_max_value = 100
-        self._attr_native_step = 1
-        self._attr_native_unit_of_measurement = "%"
-        # Initialize with current config value
-        config = self._config_manager.get_dial_config(dial_uid)
-        self._attr_native_value = config.get("dial_easing_step", 5)
-
-    async def _sync_from_config(self) -> None:
-        """Sync from configuration."""
-        config = self._config_manager.get_dial_config(self._dial_uid)
-        self._attr_native_value = config.get("dial_easing_step", 5)
-
-    @property
-    def native_value(self) -> int:
-        """Return the current value."""
-        return self._attr_native_value
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Update the value."""
-        # Store old value for rollback
-        old_value = self._attr_native_value
-        
-        # Immediately update local state for responsive UI
-        self._attr_native_value = int(value)
-        self.async_write_ha_state()
-        
-        try:
-            # Apply to hardware first
-            await self._apply_easing_config_to_server("dial", new_step=int(value))
-            # If successful, save config
-            await self._update_config(dial_easing_step=int(value))
-        except Exception as err:
-            # Rollback on error
-            self._attr_native_value = old_value
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to update dial easing step: {err}")
-
-
-class VU1BacklightEasingPeriodNumber(VU1ConfigEntityBase, NumberEntity):
-    """Number entity for backlight easing period."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the backlight easing period number."""
-        super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_backlight_easing_period"
-        self._attr_name = "Backlight easing period"
-        self._attr_icon = "mdi:timer"
-        self._attr_native_min_value = 10
-        self._attr_native_max_value = 1000
-        self._attr_native_step = 10
-        self._attr_native_unit_of_measurement = "ms"
-        # Initialize with current config value
-        config = self._config_manager.get_dial_config(dial_uid)
-        self._attr_native_value = config.get("backlight_easing_period", 50)
-
-    async def _sync_from_config(self) -> None:
-        """Sync from configuration."""
-        config = self._config_manager.get_dial_config(self._dial_uid)
-        self._attr_native_value = config.get("backlight_easing_period", 50)
-
-    @property
-    def native_value(self) -> int:
-        """Return the current value."""
-        return self._attr_native_value
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Update the value."""
-        # Store old value for rollback
-        old_value = self._attr_native_value
-        
-        # Immediately update local state for responsive UI
-        self._attr_native_value = int(value)
-        self.async_write_ha_state()
-        
-        try:
-            # Apply to hardware first
-            await self._apply_easing_config_to_server("backlight", new_period=int(value))
-            # If successful, save config
-            await self._update_config(backlight_easing_period=int(value))
-        except Exception as err:
-            # Rollback on error
-            self._attr_native_value = old_value
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to update backlight easing period: {err}")
-
-class VU1BacklightEasingStepNumber(VU1ConfigEntityBase, NumberEntity):
-    """Number entity for backlight easing step."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the backlight easing step number."""
-        super().__init__(coordinator, dial_uid, dial_data)
-        self._attr_unique_id = f"{dial_uid}_backlight_easing_step"
-        self._attr_name = "Backlight easing step"
-        self._attr_icon = "mdi:stairs"
-        self._attr_native_min_value = 1
-        self._attr_native_max_value = 100
-        self._attr_native_step = 1
-        self._attr_native_unit_of_measurement = "%"
-        # Initialize with current config value
-        config = self._config_manager.get_dial_config(dial_uid)
-        self._attr_native_value = config.get("backlight_easing_step", 5)
-
-    async def _sync_from_config(self) -> None:
-        """Sync from configuration."""
-        config = self._config_manager.get_dial_config(self._dial_uid)
-        self._attr_native_value = config.get("backlight_easing_step", 5)
-
-    @property
-    def native_value(self) -> int:
-        """Return the current value."""
-        return self._attr_native_value
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Update the value."""
-        # Store old value for rollback
-        old_value = self._attr_native_value
-        
-        # Immediately update local state for responsive UI
-        self._attr_native_value = int(value)
-        self.async_write_ha_state()
-        
-        try:
-            # Apply to hardware first
-            await self._apply_easing_config_to_server("backlight", new_step=int(value))
-            # If successful, save config
-            await self._update_config(backlight_easing_step=int(value))
-        except Exception as err:
-            # Rollback on error
-            self._attr_native_value = old_value
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to update backlight easing step: {err}")
+            raise HomeAssistantError(
+                f"Failed to update {self._description.name.lower()}: {err}"
+            )
 
 class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
     """Sensor showing current update mode."""
@@ -434,16 +307,15 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
         """Initialize the update mode sensor."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_update_mode_status"
-        self._attr_name = "Update mode"
-        self._attr_icon = "mdi:update"
+        self._attr_translation_key = "update_mode"
         self._attr_entity_category = None
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> str | None:
         """Return the current update mode."""
         if not self.hass:
-            return "unknown"
-            
+            return None
+
         config = self._config_manager.get_dial_config(self._dial_uid)
         return config.get("update_mode", "manual").title()
 
@@ -475,16 +347,15 @@ class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
         """Initialize the bound entity sensor."""
         super().__init__(coordinator, dial_uid, dial_data)
         self._attr_unique_id = f"{dial_uid}_bound_entity_status"
-        self._attr_name = "Bound entity"
-        self._attr_icon = "mdi:link"
+        self._attr_translation_key = "bound_entity"
         self._attr_entity_category = None
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> str | None:
         """Return the currently bound entity."""
         if not self.hass:
-            return "None"
-            
+            return None
+
         config = self._config_manager.get_dial_config(self._dial_uid)
         
         if config.get("update_mode") != "automatic":

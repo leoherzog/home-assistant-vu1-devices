@@ -136,6 +136,24 @@ class VU1DialEntity:
     _dial_uid: str
     coordinator: DataUpdateCoordinator
 
+    # All VU1 dial entities use the device name + translated entity name
+    # convention. Set once here so subclasses don't repeat it.
+    _attr_has_entity_name = True
+
+    @property
+    def available(self) -> bool:
+        """Return True if the dial is present in the latest coordinator data.
+
+        ``super().available`` resolves to ``CoordinatorEntity.available`` (the
+        mixin always precedes ``CoordinatorEntity`` in the MRO), so this also
+        respects the coordinator's last update success.
+        """
+        return (
+            super().available
+            and bool(self.coordinator.data)
+            and self._dial_uid in self.coordinator.data.get("dials", {})
+        )
+
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this VU1 dial."""

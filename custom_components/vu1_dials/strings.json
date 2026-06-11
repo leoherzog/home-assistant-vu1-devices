@@ -1,0 +1,187 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to VU1 Server",
+        "description": "Select how to connect to your VU1 Server.",
+        "data": {
+          "connection_type": "Connection method"
+        }
+      },
+      "manual": {
+        "title": "Manual Configuration",
+        "description": "Enter the connection details for your VU1 Server. Get the API key from the VU1 Server Web UI under Settings → API Keys (create or copy a key). The server's master key, stored in its config.yaml, also works.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "api_key": "API Key"
+        }
+      },
+      "addon": {
+        "title": "VU1 Server Add-on",
+        "description": "Enter the API key for the VU1 Server Add-on. Open the add-on's Web UI (Open Web UI), then go to Settings → API Keys to create or copy a key. The master key is printed once in the add-on log on first start and stored in /data/vu-server/config.yaml; it also works here.",
+        "data": {
+          "api_key": "API Key"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure VU1 Server",
+        "description": "Update connection settings for your VU1 Server.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "api_key": "API Key"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with VU1 Server",
+        "description": "Your VU1 Server API key is no longer valid. Enter a new one.",
+        "data": {
+          "api_key": "API Key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to VU1 server",
+      "invalid_auth": "Invalid API key",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "VU1 server is already configured",
+      "reconfigure_successful": "VU1 Server settings updated successfully",
+      "reauth_successful": "Re-authentication was successful"
+    }
+  },
+  "options": {
+    "error": {
+      "config_update_failed": "Failed to update dial configuration",
+      "value_min_greater_than_max": "Minimum value must be less than maximum value",
+      "image_upload_failed": "Failed to upload image to the dial"
+    },
+    "step": {
+      "init": {
+        "title": "VU1 Dials Options",
+        "description": "Configure update interval and dial settings",
+        "data": {
+          "update_interval": "Update interval (seconds)",
+          "timeout": "Request timeout (seconds)",
+          "configure_dial": "Configure dial"
+        }
+      },
+      "configure_dial": {
+        "title": "Configure {dial_name}",
+        "description": "Choose what to configure for this dial.",
+        "data": {
+          "dial_action": "Action"
+        }
+      },
+      "configure_update_mode": {
+        "title": "Update Mode",
+        "description": "Configure update mode for {dial_name}\n\nChoose how this dial should be updated.",
+        "data": {
+          "update_mode": "Update mode"
+        }
+      },
+      "upload_image": {
+        "title": "Upload Background Image",
+        "description": "Upload a background image for {dial_name}\n\nUpload a PNG or JPEG image. The VU1 dial display is 144x200 pixels.",
+        "data": {
+          "background_image": "Background image"
+        }
+      },
+      "configure_automatic": {
+        "title": "Automatic Mode",
+        "description": "Configure automatic sensor binding for {dial_name}\n\nSelect a sensor to bind to this dial. The sensor's value will be mapped from the specified range to 0-100% on the dial.",
+        "data": {
+          "bound_entity": "Bound sensor entity",
+          "value_min": "Minimum value",
+          "value_max": "Maximum value"
+        }
+      }
+    },
+    "abort": {
+      "config_update_failed": "Failed to update dial configuration",
+      "config_error": "Failed to load device configuration"
+    }
+  },
+  "entity": {
+    "number": {
+      "value_min": {
+        "name": "Value range minimum"
+      },
+      "value_max": {
+        "name": "Value range maximum"
+      },
+      "dial_easing_period": {
+        "name": "Dial easing period"
+      },
+      "dial_easing_step": {
+        "name": "Dial easing step"
+      },
+      "backlight_easing_period": {
+        "name": "Backlight easing period"
+      },
+      "backlight_easing_step": {
+        "name": "Backlight easing step"
+      }
+    },
+    "sensor": {
+      "value": {
+        "name": "Value"
+      },
+      "update_mode": {
+        "name": "Update mode"
+      },
+      "bound_entity": {
+        "name": "Bound entity"
+      },
+      "server_name": {
+        "name": "Server name"
+      },
+      "firmware_version": {
+        "name": "Firmware version"
+      },
+      "hardware_version": {
+        "name": "Hardware version"
+      },
+      "protocol_version": {
+        "name": "Protocol version"
+      },
+      "firmware_hash": {
+        "name": "Firmware hash"
+      }
+    },
+    "light": {
+      "backlight": {
+        "name": "Backlight"
+      }
+    },
+    "select": {
+      "behavior_preset": {
+        "name": "Dial behavior",
+        "state": {
+          "responsive": "Responsive",
+          "balanced": "Balanced",
+          "smooth": "Smooth",
+          "custom": "Custom"
+        }
+      }
+    },
+    "button": {
+      "provision_new_dials": {
+        "name": "Provision new dials"
+      },
+      "refresh_hardware_info": {
+        "name": "Refresh hardware info"
+      },
+      "identify": {
+        "name": "Identify"
+      }
+    },
+    "image": {
+      "background_image": {
+        "name": "Background image"
+      }
+    }
+  }
+}

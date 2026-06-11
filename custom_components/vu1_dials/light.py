@@ -48,7 +48,7 @@ class VU1BacklightLight(VU1DialEntity, CoordinatorEntity, LightEntity):
 
     def __init__(
         self,
-        coordinator,
+        coordinator: "VU1DataUpdateCoordinator",
         client: VU1APIClient,
         dial_uid: str,
         dial_data: dict[str, Any],
@@ -58,9 +58,7 @@ class VU1BacklightLight(VU1DialEntity, CoordinatorEntity, LightEntity):
         self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{dial_uid}_backlight"
-        self._attr_name = "Backlight"
-        self._attr_has_entity_name = True
-        self._attr_icon = "mdi:palette"
+        self._attr_translation_key = "backlight"
 
         # Configure color modes
         self._attr_supported_color_modes = {ColorMode.RGB}
@@ -80,7 +78,7 @@ class VU1BacklightLight(VU1DialEntity, CoordinatorEntity, LightEntity):
         """Return the brightness of this light between 0..255."""
         backlight = self._get_backlight_from_coordinator()
         if not backlight:
-            return 0
+            return None
 
         # Convert max RGB component (0-100) to brightness (0-255)
         max_component = max(backlight.get(color, 0) for color in ["red", "green", "blue"])
@@ -91,7 +89,7 @@ class VU1BacklightLight(VU1DialEntity, CoordinatorEntity, LightEntity):
         """Return the RGB color value."""
         backlight = self._get_backlight_from_coordinator()
         if not backlight:
-            return (255, 255, 255)  # Default to white if no data
+            return None
 
         # Convert from 0-100 range to 0-255 range
         return tuple(
@@ -101,38 +99,46 @@ class VU1BacklightLight(VU1DialEntity, CoordinatorEntity, LightEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Instruct the light to turn on."""
-        # Start with current hardware color
+        # Current hardware color in the device's 0-100 range.
         backlight = self._get_backlight_from_coordinator()
         if backlight:
-            current_rgb = [backlight.get(color, 0) for color in ["red", "green", "blue"]]
+            current_rgb_100 = [backlight.get(color, 0) for color in ["red", "green", "blue"]]
         else:
-            current_rgb = [100, 100, 100]  # Default to white
+            current_rgb_100 = [0, 0, 0]
 
-        new_color = current_rgb.copy()
-
-        # Handle RGB color change
+        # Derive a full-brightness base color in 0-255 space. When the caller
+        # supplies an explicit color, use it; otherwise normalize the current
+        # device color by its largest component so brightness can scale in both
+        # directions without compounding the dimming already baked into the
+        # stored 0-100 values.
         if ATTR_RGB_COLOR in kwargs:
-            rgb = kwargs[ATTR_RGB_COLOR]
-            # Convert from 0-255 range to 0-100 range
-            new_color = [round((c / 255) * 100) for c in rgb]
-
-        # Handle brightness change (scales the current color)
-        elif ATTR_BRIGHTNESS in kwargs:
-            brightness = kwargs[ATTR_BRIGHTNESS]
-            if brightness > 0:
-                # If all components are 0, default to white
-                if all(c == 0 for c in new_color):
-                    new_color = [100, 100, 100]
-                # Scale color to achieve desired brightness (0-255 -> 0-100)
-                scale = brightness / 255
-                new_color = [round(c * scale) for c in new_color]
+            base_rgb = list(kwargs[ATTR_RGB_COLOR])
+        else:
+            current_max = max(current_rgb_100)
+            if current_max > 0:
+                base_rgb = [round((c / current_max) * 255) for c in current_rgb_100]
             else:
-                # Brightness 0 means turn off
-                new_color = [0, 0, 0]
+                base_rgb = [255, 255, 255]  # No color info -> default to white
 
-        # If no specific color/brightness was provided, turn on with current or default color
-        elif all(c == 0 for c in new_color):
-            new_color = [100, 100, 100]  # Default to white
+        # Determine target brightness (0-255). Apply it together with the color
+        # (not via elif) so scenes sending both rgb_color and brightness work.
+        if ATTR_BRIGHTNESS in kwargs:
+            brightness = kwargs[ATTR_BRIGHTNESS]
+        else:
+            current_brightness = self.brightness
+            brightness = current_brightness if current_brightness else 255
+
+        if brightness <= 0:
+            new_color = [0, 0, 0]
+        else:
+            scale = brightness / 255
+            # Scale the 0-255 base color and convert to the device 0-100 range.
+            new_color = [round(c * scale * 100 / 255) for c in base_rgb]
+            # Clamp dim-but-on results: a nonzero brightness on a nonblack base
+            # must never round all components to 0 (which would read as off).
+            if any(c > 0 for c in base_rgb) and all(c == 0 for c in new_color):
+                max_base = max(base_rgb)
+                new_color = [1 if c == max_base else 0 for c in base_rgb]
 
         # Ensure values are in valid range
         new_color = [max(0, min(100, c)) for c in new_color]

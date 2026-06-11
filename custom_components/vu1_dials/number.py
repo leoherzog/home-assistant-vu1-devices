@@ -11,14 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, VU1DialEntity, async_setup_dial_entities
 from .vu1_api import VU1APIClient
-from .config_entities import (
-    VU1ValueMinNumber,
-    VU1ValueMaxNumber,
-    VU1DialEasingPeriodNumber,
-    VU1DialEasingStepNumber,
-    VU1BacklightEasingPeriodNumber,
-    VU1BacklightEasingStepNumber,
-)
+from .config_entities import CONFIG_NUMBER_DESCRIPTIONS, VU1ConfigNumber
 
 if TYPE_CHECKING:
     from . import VU1ConfigEntry, VU1DataUpdateCoordinator
@@ -40,12 +33,10 @@ async def async_setup_entry(
     def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
         return [
             VU1DialNumber(coordinator, client, dial_uid, dial_info),
-            VU1ValueMinNumber(coordinator, dial_uid, dial_info),
-            VU1ValueMaxNumber(coordinator, dial_uid, dial_info),
-            VU1DialEasingPeriodNumber(coordinator, dial_uid, dial_info),
-            VU1DialEasingStepNumber(coordinator, dial_uid, dial_info),
-            VU1BacklightEasingPeriodNumber(coordinator, dial_uid, dial_info),
-            VU1BacklightEasingStepNumber(coordinator, dial_uid, dial_info),
+            *(
+                VU1ConfigNumber(coordinator, dial_uid, dial_info, description)
+                for description in CONFIG_NUMBER_DESCRIPTIONS
+            ),
         ]
 
     async_setup_dial_entities(
@@ -58,7 +49,7 @@ class VU1DialNumber(VU1DialEntity, CoordinatorEntity, NumberEntity):
 
     def __init__(
         self,
-        coordinator,
+        coordinator: "VU1DataUpdateCoordinator",
         client: VU1APIClient,
         dial_uid: str,
         dial_data: dict[str, Any],
@@ -68,8 +59,10 @@ class VU1DialNumber(VU1DialEntity, CoordinatorEntity, NumberEntity):
         self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{DOMAIN}_dial_{dial_uid}"
-        self._attr_name = "Value"
-        self._attr_has_entity_name = True
+        # Main-feature convention: the dial value is the device's primary
+        # entity, so it inherits the device name (no per-entity suffix).
+        # _attr_has_entity_name is inherited from VU1DialEntity.
+        self._attr_name = None
         self._attr_native_min_value = 0
         self._attr_native_max_value = 100
         self._attr_native_step = 1
