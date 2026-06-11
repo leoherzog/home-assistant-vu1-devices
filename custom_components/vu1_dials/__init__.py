@@ -7,7 +7,7 @@ import mimetypes
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback, Event
@@ -98,6 +98,35 @@ async def async_migrate_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> boo
 
         hass.config_entries.async_update_entry(entry, data=new_data, version=2)
 
+    if entry.version == 2:
+        # v2 keyed the hub device + config-entry unique_id on host:port, which
+        # churns when the add-on hostname changes and orphaned the hub device on
+        # the Docker-IP migration. Re-key the existing hub device on entry_id
+        # (keeping the same device.id so child dials stay linked via via_device)
+        # and drop the stale host-based unique_id (duplicate prevention now uses
+        # _async_abort_entries_match in the config flow).
+        device_registry = dr.async_get(hass)
+        new_identifier = f"vu1_server_{entry.entry_id}"
+        for device in dr.async_entries_for_config_entry(device_registry, entry.entry_id):
+            new_identifiers = set()
+            needs_update = False
+            for domain, ident in device.identifiers:
+                if domain == DOMAIN and ident.startswith("vu1_server_") and ident != new_identifier:
+                    new_identifiers.add((DOMAIN, new_identifier))
+                    needs_update = True
+                else:
+                    new_identifiers.add((domain, ident))
+            if needs_update:
+                _LOGGER.info(
+                    "Migrating VU1 hub device identifier to entry-id based: %s",
+                    new_identifier,
+                )
+                device_registry.async_update_device(
+                    device.id, new_identifiers=new_identifiers
+                )
+
+        hass.config_entries.async_update_entry(entry, unique_id=None, version=3)
+
     _LOGGER.debug("Migration to version %s successful", entry.version)
     return True
 
@@ -135,7 +164,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
     client = VU1APIClient(host, port, api_key, session=session, timeout=timeout)
     connection_info = f"{host}:{port}"
-    device_identifier = f"vu1_server_{host}_{port}"
+    # Hub identity is keyed on the config entry id so it stays stable when the
+    # add-on host/port changes (e.g. Docker IP -> DNS hostname migration) and
+    # so the same server can't be orphaned/duplicated. The "vu1_server_" prefix
+    # is still how dial-vs-hub devices are distinguished elsewhere.
+    device_identifier = f"vu1_server_{entry.entry_id}"
 
     # Connection validation is handled by coordinator._async_setup during first refresh
     # which automatically raises ConfigEntryNotReady on failure
@@ -221,7 +254,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
                 dial_uid = identifier_value
                 new_name = device.name_by_user or device.name
                 hass.async_create_task(
-                    coordinator._handle_device_name_change(dial_uid, new_name)
+                    coordinator.async_handle_ha_name_change(dial_uid, new_name)
                 )
                 break
     
@@ -259,10 +292,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool
         # Do NOT manually remove devices here — it destroys user customizations
         # (area, labels, name_by_user) on reload.
 
-        # Unregister services and clean up shared managers if this is the last config entry
+        # Clean up shared managers if this is the last config entry.
+        # Services are intentionally NOT unregistered here: they are registered
+        # once in async_setup (per HA session) and must survive config-entry
+        # reloads (reconfigure, options save, manual reload). The handlers raise
+        # ServiceValidationError gracefully when no entry/dial is available.
         remaining_entries = hass.config_entries.async_entries(DOMAIN)
         if len(remaining_entries) <= 1:  # Only this entry being unloaded remains
-            async_unload_services(hass)
             # Clean up shared managers to prevent memory leaks
             hass.data.pop(f"{DOMAIN}_config_manager", None)
             hass.data.pop(f"{DOMAIN}_binding_manager", None)
@@ -270,14 +306,37 @@ async def async_unload_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool
     return unload_ok
 
 
-def async_unload_services(hass: HomeAssistant) -> None:
-    """Unload VU1 services."""
-    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_VALUE)
-    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_BACKLIGHT)
-    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_NAME)
-    hass.services.async_remove(DOMAIN, SERVICE_SET_DIAL_IMAGE)
-    hass.services.async_remove(DOMAIN, SERVICE_RELOAD_DIAL)
-    hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_DIAL)
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    config_entry: VU1ConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """Allow deletion of a device from the UI.
+
+    The hub device may never be removed while its entry exists. A dial device
+    may only be removed once the dial is gone from the server (otherwise it
+    would just be re-created on the next refresh); on removal its persisted
+    config is pruned.
+    """
+    coordinator = config_entry.runtime_data.coordinator
+    known_dials = coordinator.data.get("dials", {}) if coordinator.data else {}
+
+    for domain, identifier in device_entry.identifiers:
+        if domain != DOMAIN:
+            continue
+        if identifier.startswith("vu1_server_"):
+            # Hub device — keep it for the lifetime of the entry.
+            return False
+        # Dial device: refuse while the dial is still reported by the server.
+        if identifier in known_dials:
+            return False
+        # Dial is permanently gone — clean up its persisted configuration.
+        from .device_config import async_get_config_manager
+
+        config_manager = async_get_config_manager(hass)
+        await config_manager.async_remove_dial_config(identifier)
+
+    return True
 
 
 def _resolve_dial_uids_from_call(hass: HomeAssistant, call: ServiceCall) -> list[str]:
@@ -523,7 +582,15 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         from homeassistant.components.media_source import async_resolve_media
 
         dial_uids = _resolve_dial_uids_from_call(hass, call)
-        media_content_id = call.data.get(ATTR_MEDIA_CONTENT_ID)
+        # The `media` selector in services.yaml emits a dict
+        # ({media_content_id, media_content_type, metadata}); plain string calls
+        # (e.g. from YAML) pass the URI directly. Unwrap either form.
+        media_value = call.data.get(ATTR_MEDIA_CONTENT_ID)
+        media_content_id = (
+            media_value["media_content_id"]
+            if isinstance(media_value, dict)
+            else media_value
+        )
 
         if not media_content_id:
             _LOGGER.error("No media content ID provided for dial image")
@@ -638,7 +705,15 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 **_TARGET_SCHEMA_FIELDS,
-                vol.Required(ATTR_MEDIA_CONTENT_ID): cv.string,
+                # The `media` selector returns a dict, while YAML/templated calls
+                # pass a plain media-source URI string. Accept both.
+                vol.Required(ATTR_MEDIA_CONTENT_ID): vol.Any(
+                    cv.string,
+                    vol.Schema(
+                        {vol.Required("media_content_id"): cv.string},
+                        extra=vol.ALLOW_EXTRA,
+                    ),
+                ),
             }
         ),
     )

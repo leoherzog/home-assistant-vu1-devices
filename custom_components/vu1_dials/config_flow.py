@@ -1,5 +1,6 @@
 """Config flow for VU1 Dials integration."""
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -10,7 +11,14 @@ from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
 
-from .const import DOMAIN, CONF_ADDON_MANAGED
+from .const import (
+    DOMAIN,
+    CONF_ADDON_MANAGED,
+    CONF_HOST,
+    CONF_PORT,
+    DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_TIMEOUT,
+)
 from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 
 from homeassistant.helpers import device_registry as dr
@@ -23,7 +31,7 @@ __all__ = ["ConfigFlow", "OptionsFlowHandler"]
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VU1 Dials."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         """Initialize config flow."""
@@ -69,9 +77,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="user",
                 data_schema=schema,
                 errors=errors,
-                description_placeholders={
-                    "info": "Select how to connect to your VU1 Server."
-                }
             )
 
         if user_input.get("connection_type") == "addon":
@@ -86,10 +91,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Set unique ID to prevent duplicate manual configurations
-            await self.async_set_unique_id(f"vu1_server_{user_input['host']}_{user_input['port']}")
-            self._abort_if_unique_id_configured()
-            
+            # Prevent duplicate configurations of the same server. Identity is
+            # keyed on entry_id (not host:port), so match on the connection data.
+            self._async_abort_entries_match(
+                {CONF_HOST: user_input["host"], CONF_PORT: user_input["port"]}
+            )
+
             try:
                 info = await validate_input(self.hass, user_input)
             except CannotConnect:
@@ -112,9 +119,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="manual",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "info": "Enter the connection details for your VU1 Server."
-            }
         )
 
     async def async_step_addon(
@@ -132,9 +136,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ADDON_MANAGED: True,
             }
 
-            await self.async_set_unique_id(f"vu1_server_{self._discovered_host}_{self._discovered_port}")
-            self._abort_if_unique_id_configured()
-            
+            # Only one add-on-managed entry makes sense regardless of the
+            # add-on's current (DNS-derived) host.
+            self._async_abort_entries_match({CONF_ADDON_MANAGED: True})
+
             try:
                 info = await validate_input(self.hass, full_input)
                 info["title"] = "VU1 Server (Add-on)"
@@ -156,9 +161,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="addon",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "info": "Enter the API key for the VU1 Server Add-on."
-            }
         )
 
     async def async_step_reconfigure(
@@ -178,16 +180,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 default_port = discovered.get("port", 5340)
 
         if user_input is not None:
-            # Build updated configuration
-            updated_data = dict(entry.data)
-
-            # Only update fields that were provided
-            if "host" in user_input:
-                updated_data["host"] = user_input["host"]
-            if "port" in user_input:
-                updated_data["port"] = user_input["port"]
-            if "api_key" in user_input:
-                updated_data["api_key"] = user_input["api_key"]
+            # All reconfigure fields are vol.Required, so user_input always
+            # carries host/port/api_key; merge straight over the existing data.
+            updated_data = {**entry.data, **user_input}
 
             try:
                 await validate_input(self.hass, updated_data)
@@ -214,9 +209,42 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "info": "Update connection settings for your VU1 Server."
-            }
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle re-authentication when the API key is rejected."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm re-authentication by collecting a new API key."""
+        errors: dict[str, str] = {}
+        entry = self._get_reauth_entry()
+
+        if user_input is not None:
+            updated_data = {**entry.data, "api_key": user_input["api_key"]}
+            try:
+                await validate_input(self.hass, updated_data)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected exception during reauth")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={"api_key": user_input["api_key"]},
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required("api_key"): cv.string}),
+            errors=errors,
         )
 
     @staticmethod
@@ -228,15 +256,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return OptionsFlowHandler()
 
 
-class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options flow."""
+class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
+    """Handle options flow.
+
+    Subclasses OptionsFlowWithReload so saved options (update_interval, timeout)
+    take effect immediately — the base class reloads the entry on save, which
+    re-creates the coordinator/client with the new values.
+    """
 
     def __init__(self) -> None:
         """Initialize options flow."""
         self._dials: list[dict[str, str]] = []
         self._selected_dial: str | None = None
         self._dial_config_data: dict[str, Any] = {}
-        # Store options collected during the flow to preserve update_interval
+        # Store options collected during the flow to preserve update_interval/timeout
         self._collected_options: dict[str, Any] = {}
 
     async def async_step_init(
@@ -267,9 +300,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             self._dials = []
 
         if user_input is not None:
-            # Preserve update_interval in collected options for later
+            # Preserve update_interval/timeout in collected options for later
             if "update_interval" in user_input:
                 self._collected_options["update_interval"] = user_input["update_interval"]
+            if "timeout" in user_input:
+                self._collected_options["timeout"] = user_input["timeout"]
 
             if "configure_dial" in user_input and user_input["configure_dial"]:
                 self._selected_dial = user_input["configure_dial"]
@@ -282,8 +317,14 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         schema_dict = {
             vol.Optional(
                 "update_interval",
-                default=self.config_entry.options.get("update_interval", 30),
+                default=self.config_entry.options.get(
+                    "update_interval", DEFAULT_UPDATE_INTERVAL
+                ),
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
+            vol.Optional(
+                "timeout",
+                default=self.config_entry.options.get("timeout", DEFAULT_TIMEOUT),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
         }
         
         if self._dials:
@@ -295,9 +336,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(schema_dict),
             errors=errors,
-            description_placeholders={
-                "info": "Select a dial to configure sensor binding and advanced settings."
-            },
         )
 
     async def async_step_configure_dial(
@@ -335,7 +373,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=schema,
             description_placeholders={
                 "dial_name": dial_name,
-                "info": "Choose what to configure for this dial."
             },
         )
 
@@ -387,7 +424,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={
                 "dial_name": dial_name,
-                "info": "Choose how this dial should be updated."
             },
         )
 
@@ -443,7 +479,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={
                 "dial_name": dial_name,
-                "info": "Upload a PNG or JPEG image. The VU1 dial display is 144x200 pixels.",
             },
         )
 
@@ -524,7 +559,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={
                 "dial_name": dial_name,
-                "info": "Select a sensor to bind to this dial. The sensor's value will be mapped from the specified range to 0-100% on the dial."
             },
         )
 

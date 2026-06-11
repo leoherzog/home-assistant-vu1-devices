@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -66,7 +67,9 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             )
 
         if not connection_result["authenticated"]:
-            raise UpdateFailed(
+            # Bad/revoked API key: trigger a reauth flow instead of retrying
+            # forever with credentials that will never work.
+            raise ConfigEntryAuthFailed(
                 f"Authentication failed: {connection_result.get('error', 'Invalid API key')}"
             )
 
@@ -129,15 +132,24 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             if self._binding_manager:
                 await self._binding_manager.async_update_bindings({"dials": dial_data})
 
+            # Detect dials provisioned outside HA (e.g. via the server web UI).
+            # Diff the freshly fetched UIDs against the known set and schedule
+            # entity creation for genuinely new dials. Run as a task so it
+            # executes after this refresh completes and self.data is populated,
+            # rather than re-entering listeners mid-refresh.
+            current_uids = set(dial_data.keys())
+            new_uids = current_uids - self._known_dial_uids
+            if new_uids:
+                self.update_known_dials(current_uids)
+                self.hass.async_create_task(self.async_notify_new_dials(new_uids))
+
             return {"dials": dial_data}
 
         except VU1AuthError as err:
-            # Auth errors - longer delay to avoid hammering with bad credentials
+            # Auth errors - the API key is no longer valid; surface a repair
+            # and start a reauth flow rather than backing off forever.
             _LOGGER.error("VU1 authentication error: %s", err)
-            raise UpdateFailed(
-                f"Authentication error: {err}",
-                retry_after=300,  # 5 minutes
-            ) from err
+            raise ConfigEntryAuthFailed(f"Authentication error: {err}") from err
         except VU1ConnectionError as err:
             # Connection errors - standard retry (no retry_after)
             _LOGGER.error("VU1 connection error: %s", err)
@@ -247,15 +259,18 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             self._name_change_grace_periods.pop(dial_uid, None)
             raise
 
-    async def _handle_device_name_change(self, dial_uid: str, new_name: str) -> None:
-        """Handle device name change from HA UI."""
-        # Check if we're in a grace period (change originated from server)
-        current_time = dt_util.utcnow()
-        grace_end = self._name_change_grace_periods.get(dial_uid)
-        if grace_end and current_time < grace_end:
-            _LOGGER.debug("Ignoring HA name change for %s during grace period", dial_uid)
-            return
+    async def async_handle_ha_name_change(self, dial_uid: str, new_name: str) -> None:
+        """Handle device name change originating from the HA UI.
 
+        No grace-period check here: grace periods are only ever set by
+        HA-originated changes (mark_name_change_from_ha), and nothing in the
+        integration writes name_by_user, so there is no server->HA->server
+        feedback loop to suppress. The grace check belongs only in
+        _sync_name_from_server (server->HA echo). The _previous_dial_names
+        comparison below already dedupes; an additional grace check here would
+        silently drop a second user rename within the grace window and leave
+        HA and the server permanently desynced.
+        """
         # Check if name actually changed
         if self._previous_dial_names.get(dial_uid) == new_name:
             return
