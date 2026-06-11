@@ -50,7 +50,15 @@ class VU1DialConfigManager:
         """Load configurations from storage."""
         data = await self._store.async_load()
         if data:
-            self._configs = data.get("dial_configs", {})
+            stored = data.get("dial_configs", {})
+            # Validate/sanitize each stored config so malformed persisted data
+            # can't propagate. Skip the bound-entity existence check here: the
+            # entity/state registries may not be fully populated this early in
+            # startup, and we don't want to silently drop valid bindings.
+            self._configs = {
+                dial_uid: self._validate_config(config, validate_entity=False)
+                for dial_uid, config in stored.items()
+            }
 
     async def async_save(self) -> None:
         """Save configurations to storage."""
@@ -81,6 +89,22 @@ class VU1DialConfigManager:
         # Notify listeners outside the lock to avoid deadlocks
         await self._notify_listeners(dial_uid, validated_config)
 
+    async def async_remove_dial_config(self, dial_uid: str) -> None:
+        """Remove stored configuration for a dial.
+
+        Safe to call even when the dial has no stored config (no-op). Intended
+        for use from ``async_remove_config_entry_device`` so a removed dial
+        doesn't leave orphaned persisted configuration behind.
+        """
+        async with self._update_lock:
+            if dial_uid not in self._configs:
+                return
+            del self._configs[dial_uid]
+            await self.async_save()
+
+        # Drop any listeners registered for the now-removed dial.
+        self._listeners.pop(dial_uid, None)
+
     def _get_default_config(self) -> dict[str, Any]:
         """Get default dial configuration."""
         return {
@@ -97,19 +121,25 @@ class VU1DialConfigManager:
             "backlight_easing_step": 5,
         }
 
-    def _validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
-        """Validate and sanitize dial configuration."""
+    def _validate_config(
+        self, config: dict[str, Any], *, validate_entity: bool = True
+    ) -> dict[str, Any]:
+        """Validate and sanitize dial configuration.
+
+        When ``validate_entity`` is False the bound-entity existence check is
+        skipped (used during startup load, before the registries are ready).
+        """
         # Create a copy to operate on, preserving the original
         validated = config.copy()
-        
+
         # Fill in any missing keys with defaults
         defaults = self._get_default_config()
         for key, default_value in defaults.items():
             if key not in validated:
                 validated[key] = default_value
-        
+
         # Validate bound entity exists in entity registry
-        if validated.get(CONF_BOUND_ENTITY) and not self._is_valid_entity(validated[CONF_BOUND_ENTITY]):
+        if validate_entity and validated.get(CONF_BOUND_ENTITY) and not self._is_valid_entity(validated[CONF_BOUND_ENTITY]):
             validated[CONF_BOUND_ENTITY] = None
         
         # Validate value_min as float

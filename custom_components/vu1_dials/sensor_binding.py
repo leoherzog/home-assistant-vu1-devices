@@ -4,6 +4,7 @@ import logging
 import re
 from typing import Any, Callable
 
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers import entity_registry as er
@@ -85,9 +86,15 @@ class VU1SensorBindingManager:
                 await self._remove_binding(dial_uid)
                 await self._create_binding(dial_uid, bound_entity, config, dial_data)
             else:
-                # Same entity - just update the config (range settings, colors, etc.)
+                # Same entity - update the config (range settings, colors, etc.)
+                # and re-apply the current sensor value immediately so a changed
+                # range/mapping takes effect without waiting for the next state
+                # change.
                 existing_binding["config"] = config.copy()
                 existing_binding["dial_data"] = dial_data.copy()
+                current_state = self.hass.states.get(bound_entity)
+                if current_state:
+                    await self._apply_sensor_value_from_state(dial_uid, current_state)
         else:
             # No binding exists for this dial - create one
             await self._create_binding(dial_uid, bound_entity, config, dial_data)
@@ -264,20 +271,33 @@ class VU1SensorBindingManager:
 
     def _parse_sensor_value(self, state: State) -> float | None:
         """Parse sensor state to numeric value."""
-        try:
-            # Try direct numeric conversion
-            return float(state.state)
-        except (ValueError, TypeError):
-            # Handle special Home Assistant states
-            if state.state in ["unknown", "unavailable", "none"]:
-                return None
-            
-            # Extract first numeric value from string (e.g., "23.5°C" -> 23.5)
-            match = re.search(r'[-+]?\d*\.?\d+', str(state.state))
-            if match:
-                return float(match.group())
-            
+        raw = state.state
+        # Reject explicit non-numeric / empty states up front.
+        if raw in (STATE_UNKNOWN, STATE_UNAVAILABLE, None, ""):
             return None
+
+        try:
+            # Direct conversion handles plain numbers and scientific
+            # notation (e.g. "1.5e-3").
+            return float(raw)
+        except (ValueError, TypeError):
+            pass
+
+        text = str(raw)
+
+        # Ambiguous grouping/decimal separators (e.g. "1,234 W") can't be
+        # parsed reliably — skip rather than silently returning a wrong value.
+        if re.search(r"\d[.,]\d{3}(?:\D|$)", text):
+            _LOGGER.debug("Ambiguous numeric format %r for sensor; skipping", text)
+            return None
+
+        # Extract a leading numeric value, including scientific notation
+        # (e.g. "23.5 C" -> 23.5).
+        match = re.search(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", text)
+        if match:
+            return float(match.group())
+
+        return None
 
     def _map_value_to_dial(self, sensor_value: float, config: dict[str, Any]) -> int:
         """Map sensor value to dial range (0-100)."""
@@ -340,6 +360,21 @@ class VU1SensorBindingManager:
     async def async_remove_binding(self, dial_uid: str) -> None:
         """Public interface for removing a single dial's binding."""
         await self._remove_binding(dial_uid)
+
+    @callback
+    def async_get_bindings_summary(self) -> dict[str, dict[str, Any]]:
+        """Return a redaction-safe summary of active bindings.
+
+        Public accessor for diagnostics so callers don't have to read the
+        private ``_bindings`` mapping.
+        """
+        return {
+            dial_uid: {
+                "entity_id": binding.get("entity_id"),
+                "has_last_state": binding.get("last_state") is not None,
+            }
+            for dial_uid, binding in self._bindings.items()
+        }
 
 
 @callback

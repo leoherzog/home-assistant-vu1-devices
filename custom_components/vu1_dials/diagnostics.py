@@ -41,7 +41,7 @@ async def async_get_config_entry_diagnostics(
             "domain": entry.domain,
             "title": entry.title,
             "data": async_redact_data(dict(entry.data), TO_REDACT),
-            "options": dict(entry.options),
+            "options": async_redact_data(dict(entry.options), TO_REDACT),
         },
         "coordinator": {
             "last_update_success": coordinator.last_update_success,
@@ -60,15 +60,10 @@ async def async_get_config_entry_diagnostics(
             "detailed_status": dial_data.get("detailed_status", {}),
         }
 
-    # Add binding manager state
+    # Add binding manager state via its public accessor (avoid reading private
+    # internals from another module).
     binding_manager = runtime_data.binding_manager
     if binding_manager:
-        bindings_info: dict[str, Any] = {}
-        for dial_uid, binding in binding_manager._bindings.items():
-            bindings_info[dial_uid] = {
-                "entity_id": binding.get("entity_id"),
-                "has_last_state": binding.get("last_state") is not None,
-            }
-        diagnostics_data["sensor_bindings"] = bindings_info
+        diagnostics_data["sensor_bindings"] = binding_manager.async_get_bindings_summary()
 
     return diagnostics_data

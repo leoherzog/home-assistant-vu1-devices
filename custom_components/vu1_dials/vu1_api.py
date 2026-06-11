@@ -15,6 +15,10 @@ __all__ = ["VU1APIClient", "VU1APIError", "VU1ConnectionError", "VU1AuthError", 
 DEFAULT_PORT = 5340
 DEFAULT_TIMEOUT = 10
 
+# Exact message the VU1 server returns (HTTP 200 + status:"fail" on dial/set and
+# dial/status, HTTP 503 on setRaw/backlight/image) when a dial is offline.
+OFFLINE_MESSAGE = "Invalid dial_uid or device is offline."
+
 
 class VU1APIError(Exception):
     """Base exception for VU1 API errors."""
@@ -76,25 +80,31 @@ class VU1APIClient:
             await self._session.close()
             self._session = None
 
-    def _prepare_auth_headers_and_params(self, endpoint: str, params: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
-        """Prepare authentication headers and parameters for API requests.
+    def _auth_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return request params with the VU1 API key attached.
 
-        Args:
-            endpoint: The API endpoint path
-            params: Optional parameters dict to add auth to
-
-        Returns:
-            Tuple of (headers_dict, params_dict)
+        The key is appended unless the caller already supplied an ``admin_key``
+        (used by admin-only endpoints) or no API key is configured.
         """
-        headers: dict[str, str] = {}
         if params is None:
             params = {}
-
-        # Add VU1 API key unless the caller already provided admin_key
         if self.api_key and "admin_key" not in params:
             params["key"] = self.api_key
+        return params
 
-        return headers, params
+    @staticmethod
+    def _check_json_status(data: dict[str, Any]) -> None:
+        """Raise the matching exception for a non-ok VU1 JSON payload.
+
+        The server signals an offline dial with HTTP 200 + status:"fail" and the
+        ``OFFLINE_MESSAGE`` body on dial/set and dial/status, so detect it here
+        and surface it as ``VU1DialOfflineError`` rather than a generic error.
+        """
+        if data.get("status") != "ok":
+            message = data.get("message", "Unknown error")
+            if message == OFFLINE_MESSAGE:
+                raise VU1DialOfflineError(f"Dial offline or unavailable: {message}")
+            raise VU1APIError(f"API error: {message}")
 
     async def _request(
         self,
@@ -104,14 +114,19 @@ class VU1APIClient:
     ) -> dict[str, Any]:
         """Make an API request."""
         url = f"{self.base_url}/{endpoint}"
-        headers, params = self._prepare_auth_headers_and_params(endpoint, params)
+        params = self._auth_params(params)
 
         try:
             endpoint_name = endpoint.split('/')[-1] if '/' in endpoint else endpoint
             _LOGGER.debug("Making API request to %s", endpoint_name)
-            async with self.session.request(method, url, params=params, headers=headers) as response:
+            async with self.session.request(
+                method,
+                url,
+                params=params,
+                timeout=ClientTimeout(total=self.timeout),
+            ) as response:
                 _LOGGER.debug("Response status: %s", response.status)
-                
+
                 # Log error response body for debugging
                 if response.status >= 400:
                     try:
@@ -119,16 +134,15 @@ class VU1APIClient:
                         _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
                     except Exception:
                         _LOGGER.debug("Could not read error response body")
-                
+
                 response.raise_for_status()
-                
+
                 if response.content_type == "application/json":
                     data = await response.json()
-                    
-                    # Check VU1 API status field
-                    if data.get("status") != "ok":
-                        raise VU1APIError(f"API error: {data.get('message', 'Unknown error')}")
-                    
+
+                    # Check VU1 API status field (raises on offline/error payloads)
+                    self._check_json_status(data)
+
                     return data
                 else:
                     # Handle binary responses (like images)
@@ -149,7 +163,23 @@ class VU1APIClient:
         raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
 
     async def test_connection(self) -> dict[str, Any]:
-        """Test connection and API key, returning detailed status."""
+        """Test connection and API key, returning detailed status.
+
+        Return contract (always a dict with these four keys):
+          - ``connected``: ``False`` only on a network-level failure
+            (``VU1ConnectionError`` — timeout, refused, DNS, etc.); ``True``
+            whenever the server returned any HTTP response.
+          - ``authenticated``: ``False`` only when the server rejected the API
+            key (``VU1AuthError`` — HTTP 401/403). A generic ``VU1APIError``
+            (HTTP 500 or a 200 + status:"fail" body) keeps ``authenticated``
+            ``True`` and reports the problem via ``error`` — it is a server-side
+            problem, not a bad key, so callers must not treat it as invalid auth.
+          - ``dials``: the dial list on full success, otherwise ``[]``.
+          - ``error``: ``None`` on full success, otherwise ``str(err)``.
+
+        Callers map ``connected=False`` -> CannotConnect and
+        ``authenticated=False`` -> InvalidAuth.
+        """
         _LOGGER.debug("Testing connection to VU1 server at %s", self.base_url)
         try:
             # Use dial list endpoint which requires valid auth to test both connectivity and API key
@@ -180,11 +210,13 @@ class VU1APIClient:
                 "error": str(err),
             }
         except VU1APIError as err:
-            # Other API errors (server responded but with an error)
+            # Server responded but returned a non-auth error (HTTP 500 or a
+            # 200 + status:"fail" body). This is a server-side fault, not a bad
+            # API key, so keep authenticated=True and surface it via "error".
             _LOGGER.error("API error during connection test: %s", err)
             return {
                 "connected": True,
-                "authenticated": False,
+                "authenticated": True,
                 "dials": [],
                 "error": str(err),
             }
@@ -250,31 +282,36 @@ class VU1APIClient:
             raise ValueError("image_data cannot be empty")
         
         url = f"{self.base_url}/api/{API_VERSION}/dial/{dial_uid}/image/set"
-        headers, params = self._prepare_auth_headers_and_params(f"api/{API_VERSION}/dial/{dial_uid}/image/set")
-        
+        params = self._auth_params()
+
         # Create multipart form data
         form_data = aiohttp.FormData()
         form_data.add_field('imgfile', image_data, filename='background.png', content_type=content_type)
-        
+
         try:
             _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(image_data))
-            async with self.session.request("POST", url, data=form_data, params=params, headers=headers) as response:
+            async with self.session.request(
+                "POST",
+                url,
+                data=form_data,
+                params=params,
+                timeout=ClientTimeout(total=self.timeout),
+            ) as response:
                 _LOGGER.debug("Image upload response status: %s", response.status)
-                
+
                 if response.status >= 400:
                     try:
                         error_body = await response.text()
                         _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
                     except Exception:
                         _LOGGER.debug("Could not read error response body")
-                
+
                 response.raise_for_status()
-                
+
                 if response.content_type == "application/json":
                     data = await response.json()
-                    if data.get("status") != "ok":
-                        raise VU1APIError(f"API error: {data.get('message', 'Unknown error')}")
-                
+                    self._check_json_status(data)
+
                 _LOGGER.debug("Successfully uploaded image to dial %s", dial_uid)
                     
         except aiohttp.ClientResponseError as err:
@@ -324,7 +361,7 @@ async def discover_vu1_addon() -> dict[str, Any]:
     """Discover VU1 Server add-on via Home Assistant Supervisor API."""
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
     if not supervisor_token:
-        _LOGGER.warning("No SUPERVISOR_TOKEN available, not running in Home Assistant OS")
+        _LOGGER.debug("No SUPERVISOR_TOKEN available, not running in Home Assistant OS")
         return {}
     
     try:
@@ -375,20 +412,25 @@ async def discover_vu1_addon() -> dict[str, Any]:
                                             "addon_discovered": True,
                                         }
 
+                                    # Info call succeeded but exposed no address;
+                                    # keep scanning in case another slug matches.
                                     _LOGGER.warning(
-                                        "No hostname or IP found for VU1 Server add-on"
+                                        "No hostname or IP found for VU1 Server add-on %s",
+                                        slug,
                                     )
-                                    return {}
+                                    continue
                                 else:
-                                    _LOGGER.debug("Failed to get detailed add-on info")
-                                    return {}
+                                    # Info lookup failed for this slug; try the next match.
+                                    _LOGGER.debug("Failed to get detailed add-on info for %s", slug)
+                                    continue
                         else:
-                            _LOGGER.debug("VU1 Server add-on found but not running")
-                            return {}
-                
+                            # Matched slug isn't running; another install may be.
+                            _LOGGER.debug("VU1 Server add-on %s found but not running", addon_slug)
+                            continue
+
                 _LOGGER.warning("VU1 Server add-on not found in installed add-ons")
                 return {}
-                
-    except Exception as err:
+
+    except (ClientError, asyncio.TimeoutError) as err:
         _LOGGER.error("Error discovering VU1 Server add-on: %s", err)
         return {}

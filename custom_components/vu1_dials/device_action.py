@@ -4,9 +4,10 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.const import CONF_DEVICE_ID, CONF_DOMAIN, CONF_TYPE
 from homeassistant.core import HomeAssistant, Context
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers import config_validation as cv, selector
 from homeassistant.helpers.typing import ConfigType, TemplateVarsType
 
 from .const import (
@@ -20,9 +21,6 @@ from .const import (
     CONF_BACKLIGHT_EASING,
     CONF_UPDATE_MODE,
     UPDATE_MODE_AUTOMATIC,
-    DEFAULT_VALUE_MIN,
-    DEFAULT_VALUE_MAX,
-    DEFAULT_BACKLIGHT_COLOR,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,36 +35,55 @@ EASING_PRESETS = {
     if "dial_easing_period" in p  # Skip "custom" which has no numeric values
 }
 
-__all__ = ["async_get_actions", "async_call_action_from_config", "async_get_action_capabilities"]
+__all__ = [
+    "ACTION_SCHEMA",
+    "async_get_actions",
+    "async_call_action_from_config",
+    "async_get_action_capabilities",
+]
 
 ACTION_CONFIGURE_DIAL = "configure_dial"
+
+# Entities that make sense to bind a dial to (numeric value sources).
+_BINDABLE_ENTITY_SELECTOR = selector.EntitySelector(
+    selector.EntitySelectorConfig(domain=["sensor", "input_number", "number"])
+)
 
 
 def validate_min_max_range(config):
     """Validate that value_min < value_max if both are provided."""
     value_min = config.get(CONF_VALUE_MIN)
     value_max = config.get(CONF_VALUE_MAX)
-    
+
     if value_min is not None and value_max is not None and value_min >= value_max:
         raise vol.Invalid(f"value_min ({value_min}) must be less than value_max ({value_max})")
-    
+
     return config
 
-CONFIGURE_DIAL_ACTION_SCHEMA = vol.All(
-    vol.Schema(
+
+# Optional configuration fields shared by the action schema and its capabilities.
+# No ``default=`` here on purpose: an action must only apply the keys the user
+# actually configured, otherwise unrelated dial settings get silently reset.
+_CONFIGURE_DIAL_FIELDS = {
+    vol.Optional(CONF_BOUND_ENTITY): _BINDABLE_ENTITY_SELECTOR,
+    vol.Optional(CONF_VALUE_MIN): vol.Coerce(float),
+    vol.Optional(CONF_VALUE_MAX): vol.Coerce(float),
+    vol.Optional(CONF_BACKLIGHT_COLOR): vol.All(
+        vol.Length(min=3, max=3),
+        [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
+    ),
+    vol.Optional(CONF_DIAL_EASING): vol.In(list(EASING_PRESETS.keys())),
+    vol.Optional(CONF_BACKLIGHT_EASING): vol.In(list(EASING_PRESETS.keys())),
+    vol.Optional(CONF_UPDATE_MODE): vol.In([UPDATE_MODE_AUTOMATIC, "manual"]),
+}
+
+# The device-automation framework validates actions via ``platform.ACTION_SCHEMA``
+# (built on ``cv.DEVICE_ACTION_BASE_SCHEMA``, which supplies CONF_DEVICE_ID/CONF_DOMAIN).
+ACTION_SCHEMA = vol.All(
+    cv.DEVICE_ACTION_BASE_SCHEMA.extend(
         {
-            vol.Required("type"): ACTION_CONFIGURE_DIAL,
-            vol.Required("device_id"): cv.string,
-            vol.Optional(CONF_BOUND_ENTITY): cv.entity_id,
-            vol.Optional(CONF_VALUE_MIN, default=DEFAULT_VALUE_MIN): vol.Coerce(float),
-            vol.Optional(CONF_VALUE_MAX, default=DEFAULT_VALUE_MAX): vol.Coerce(float),
-            vol.Optional(CONF_BACKLIGHT_COLOR, default=DEFAULT_BACKLIGHT_COLOR): vol.All(
-                vol.Length(min=3, max=3),
-                [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
-            ),
-            vol.Optional(CONF_DIAL_EASING, default="balanced"): vol.In(list(EASING_PRESETS.keys())),
-            vol.Optional(CONF_BACKLIGHT_EASING, default="balanced"): vol.In(list(EASING_PRESETS.keys())),
-            vol.Optional(CONF_UPDATE_MODE, default="manual"): vol.In([UPDATE_MODE_AUTOMATIC, "manual"]),
+            vol.Required(CONF_TYPE): ACTION_CONFIGURE_DIAL,
+            **_CONFIGURE_DIAL_FIELDS,
         }
     ),
     validate_min_max_range,
@@ -81,10 +98,11 @@ async def async_get_actions(hass: HomeAssistant, device_id: str) -> list[dict[st
     dial_uid = await _get_dial_uid_for_device(hass, device_id)
     if dial_uid:
         actions.append({
-            "type": ACTION_CONFIGURE_DIAL,
-            "device_id": device_id,
+            CONF_DEVICE_ID: device_id,
+            CONF_DOMAIN: DOMAIN,
+            CONF_TYPE: ACTION_CONFIGURE_DIAL,
         })
-    
+
     return actions
 
 
@@ -95,8 +113,8 @@ async def async_call_action_from_config(
     context: Context,
 ) -> None:
     """Execute a device action."""
-    action_type = config["type"]
-    
+    action_type = config[CONF_TYPE]
+
     if action_type == ACTION_CONFIGURE_DIAL:
         await _async_configure_dial(hass, config)
     else:
@@ -107,42 +125,20 @@ async def async_get_action_capabilities(
     hass: HomeAssistant, config: ConfigType
 ) -> dict[str, Any]:
     """Get action capabilities."""
-    action_type = config["type"]
-    
+    action_type = config[CONF_TYPE]
+
     if action_type == ACTION_CONFIGURE_DIAL:
-        # Get available entities for binding
-        entity_registry = er.async_get(hass)
-        entities = []
-        
-        for entity in entity_registry.entities.values():
-            # Include sensors and other numeric entities
-            if entity.domain in ["sensor", "input_number", "number"]:
-                entities.append({
-                    "value": entity.entity_id,
-                    "label": f"{entity.entity_id} ({entity.name or entity.entity_id})",
-                })
-        
-        return {
-            "extra_fields": vol.Schema({
-                vol.Optional(CONF_BOUND_ENTITY): vol.In([e["value"] for e in entities]),
-                vol.Optional(CONF_VALUE_MIN): vol.Coerce(float),
-                vol.Optional(CONF_VALUE_MAX): vol.Coerce(float),
-                vol.Optional(CONF_BACKLIGHT_COLOR): vol.All(
-                    vol.Length(min=3, max=3),
-                    [vol.All(vol.Coerce(int), vol.Range(min=0, max=100))],
-                ),
-                vol.Optional(CONF_DIAL_EASING): vol.In(list(EASING_PRESETS.keys())),
-                vol.Optional(CONF_BACKLIGHT_EASING): vol.In(list(EASING_PRESETS.keys())),
-                vol.Optional(CONF_UPDATE_MODE): vol.In([UPDATE_MODE_AUTOMATIC, "manual"]),
-            })
-        }
-    
+        # Use an EntitySelector for the bound entity instead of serializing the
+        # whole entity registry into a vol.In. The extra fields mirror the
+        # optional keys in ACTION_SCHEMA exactly (no defaults).
+        return {"extra_fields": vol.Schema(_CONFIGURE_DIAL_FIELDS)}
+
     return {}
 
 
 async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None:
     """Configure a VU1 dial."""
-    device_id = config["device_id"]
+    device_id = config[CONF_DEVICE_ID]
     dial_uid = await _get_dial_uid_for_device(hass, device_id)
     
     if not dial_uid:
@@ -255,7 +251,3 @@ async def _get_dial_uid_for_device(hass: HomeAssistant, device_id: str) -> str |
             return identifier_value
     
     return None
-
-
-# Register the action schema
-DEVICE_ACTION_SCHEMA = vol.Any(CONFIGURE_DIAL_ACTION_SCHEMA)
