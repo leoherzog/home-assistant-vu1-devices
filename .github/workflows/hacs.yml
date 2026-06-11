@@ -2,6 +2,7 @@ name: HACS Validator
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -9,9 +10,20 @@ jobs:
     name: HACS Action
     runs-on: "ubuntu-latest"
     steps:
+      - name: Checkout
+        uses: "actions/checkout@v4"
       - name: HACS Action
-        uses: "hacs/action@main"
+        uses: "hacs/action@22.5.0"
         with:
           category: "integration"
           ignore: "brands"
           comment: true
+
+  hassfest:
+    name: Hassfest
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: Checkout
+        uses: "actions/checkout@v4"
+      - name: Hassfest validation
+        uses: "home-assistant/actions/hassfest@master"

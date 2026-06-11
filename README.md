@@ -34,8 +34,28 @@ A Home Assistant integration for [Streacom VU1](https://streacom.com/products/vu
 1. Go to **Settings** → **Devices & Services** → **Add Integration**
 2. Search for "Streacom VU1 Dials"
 3. Choose connection method:
-   - **Add-on**: Auto-discovered if VU1 Server add-on is installed
-   - **Manual**: Enter host, port (default: 5340), and API key
+   - **Add-on**: Offered automatically when the VU1 Server add-on is installed and
+     running. The host and port are discovered for you (via the Supervisor API and
+     the add-on's stable hostname) — you only enter the API key.
+   - **Manual**: Enter host, port (default: 5340), and API key.
+
+### Where to get the API key
+
+1. Open the VU1 Server Web UI (the **Open Web UI** button on the add-on page, or
+   browse to your server directly).
+2. Unlock it with the **master key**. For the add-on, the master key is generated
+   on first start and printed **once** in the add-on log; it's also stored in
+   `/data/vu-server/config.yaml`.
+3. Go to **Settings → API Keys** and create/copy a key, then paste it into the
+   integration. (The master key itself also works, and is required for provisioning
+   new dials.)
+
+### Re-authentication
+
+If the API key is later revoked or changed on the server, the integration detects
+the rejected key and starts a **re-authentication** flow — Home Assistant prompts
+you to enter a new key without removing and re-adding the integration. You can also
+change the host/port/key any time via the integration's **Reconfigure** option.
 
 ## Entities
 
@@ -146,12 +166,14 @@ data:
 
 Configure via **Devices & Services** → **VU1 Dials** → **Configure**:
 
-- **Update interval** - How often to poll the server (default: 30 seconds)
-- **Timeout** - API request timeout (default: 10 seconds)
+- **Update interval** - How often to poll the server (default: 30 seconds, range 5–300)
+- **Timeout** - API request timeout (default: 10 seconds, range 1–60)
+
+Both options take effect immediately on save (the integration reloads itself).
 
 ## Requirements
 
-- Home Assistant 2023.3.0+
+- Home Assistant 2025.12.0 or newer
 - VU1 Server running (add-on or standalone)
 - Valid API key from VU1 Server
 
@@ -178,7 +200,7 @@ Feel free to take a look at the source and adapt as you please. This source is l
 
 [![Creative Commons License](https://i.creativecommons.org/l/by-sa/4.0/88x31.png)](http://creativecommons.org/licenses/by-sa/4.0/)
 
-Linux Exchange is licensed under a [Creative Commons Attribution-ShareAlike 4.0 International License](http://creativecommons.org/licenses/by-sa/4.0/).
+Streacom VU1 Dials is licensed under a [Creative Commons Attribution-ShareAlike 4.0 International License](http://creativecommons.org/licenses/by-sa/4.0/).
 
 ---
 

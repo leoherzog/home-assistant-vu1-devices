@@ -9,7 +9,7 @@ This project is a **Home Assistant Custom Component** that integrates **Streacom
 *   **Sensor Binding**: Built-in logic to bind any Home Assistant sensor to a dial, mapping values (e.g., CPU Temp 30-80°C) to the dial's percentage (0-100%).
 *   **Bidirectional Sync**: Renaming a dial in HA renames it on the server, and vice versa.
 *   **Visual Customization**: Upload background images and control RGB backlights.
-*   **Flexible Connectivity**: Supports both direct IP/Port connections and Home Assistant Ingress (for Supervisor add-ons).
+*   **Connectivity**: Connects directly to the VU1 Server's HTTP API at `host:port` (default `5340`). When running under Supervisor, the add-on's `host:port` is auto-discovered; the API key is always entered manually.
 
 ---
 
@@ -34,11 +34,16 @@ custom_components/vu1_dials/
 ├── select.py            # Behavior preset select entity
 ├── button.py            # Action buttons (provision, identify, refresh)
 ├── image.py             # Background image entity
-├── device_action.py     # Device automation triggers
+├── device_action.py     # Device automation actions
 ├── services.yaml        # Service definitions for HA UI
-├── translations/en.json # UI strings for config flow
-└── manifest.json        # Integration metadata (requires HA 2025.12+)
+├── strings.json         # Source UI strings (config/options flow + entity names)
+├── translations/en.json # English translations (kept byte-identical to strings.json)
+├── icons.json           # Per-entity icons keyed by translation_key
+└── manifest.json        # Integration metadata (integration_type: hub)
 ```
+
+> Minimum Home Assistant version (`2025.12.0`) lives in `hacs.json`, **not** in
+> `manifest.json` — there is no `homeassistant` key in the manifest.
 
 ### Data Flow
 
@@ -91,13 +96,22 @@ Data is stored on the config entry itself via `entry.runtime_data = VU1RuntimeDa
 - `async_unload_entry()`: Cleanup when removing an entry
 
 **Service Registration:**
-Services are registered in `async_setup_services()`:
+Services are registered **once per HA session** in `async_setup_services()` (called
+from `async_setup`, guarded by a `hass.services.has_service(...)` check):
 - `vu1_dials.set_dial_value` - Set dial position (0-100%)
 - `vu1_dials.set_dial_backlight` - Set RGB backlight (0-100% each)
 - `vu1_dials.set_dial_name` - Rename a dial
-- `vu1_dials.set_dial_image` - Upload background image from media library
+- `vu1_dials.set_dial_image` - Set background image from a media-source URI
 - `vu1_dials.reload_dial` - Reload dial hardware config
 - `vu1_dials.calibrate_dial` - Hardware calibration
+
+**Services are intentionally NOT unregistered in `async_unload_entry`.** They must
+survive config-entry reloads (reconfigure, options save, `OptionsFlowWithReload`,
+manual reload). The handlers resolve the target dial across all loaded entries and
+raise `ServiceValidationError` when no entry/dial is available. Service targets are
+resolved from `device_id` / `entity_id` / `area_id` / `floor_id` / `label_id`
+selectors via `_resolve_dial_uids_from_call()`; most services fan out across all
+targeted dials concurrently (`set_dial_name` is single-target only).
 
 **Device Registry Listener:**
 Handles bidirectional name sync by listening to `EVENT_DEVICE_REGISTRY_UPDATED`:
@@ -111,10 +125,17 @@ def handle_device_registry_updated(event: Event[EventDeviceRegistryUpdatedData])
 
 **Class: `VU1APIClient`**
 
-Async HTTP client using `aiohttp`. Supports two authentication modes:
+Async HTTP client using `aiohttp`. There is exactly **one** authentication mode:
+the configured API key is appended as the `?key=...` query parameter on every
+request (via `_auth_params()`; admin endpoints like `provision` send it as
+`admin_key` instead). There is **no ingress/Supervisor-token auth path** — the
+Supervisor token is used only by the separate `discover_vu1_addon()` helper to
+look up the add-on's host, never to authenticate API calls.
 
-1. **Direct Connection**: API key passed as query parameter (`?key=...`)
-2. **Ingress Mode**: Supervisor token in `Authorization` header + API key
+The constructor takes a `timeout` (default `DEFAULT_TIMEOUT = 10s`); it is applied
+**per request** via `ClientTimeout(total=self.timeout)` (and on the session). The
+integration passes the entry's `timeout` option in, so changing the option and
+reloading changes the request timeout.
 
 **Key Methods:**
 ```python
@@ -146,12 +167,32 @@ Exception hierarchy for granular error handling:
 - `VU1APIError` - Base exception for all API errors
 - `VU1ConnectionError(VU1APIError)` - Network/connection failures (timeout, refused)
 - `VU1AuthError(VU1APIError)` - Authentication failures (HTTP 401/403)
+- `VU1DialOfflineError(VU1APIError)` - Dial offline/unavailable. The server signals
+  this as **HTTP 503** on some endpoints **and** as **HTTP 200 + `status:"fail"`**
+  with the body `"Invalid dial_uid or device is offline."` on `dial/set` and
+  `dial/status`. `_check_json_status()` inspects the JSON `status`/`message` of
+  every 200 response and raises this rather than a generic error.
+
+**`test_connection()` contract** (always returns a dict with these four keys):
+- `connected`: `False` **only** on a network-level failure (`VU1ConnectionError`);
+  `True` whenever the server returned any HTTP response.
+- `authenticated`: `False` **only** when the key was rejected (`VU1AuthError`,
+  401/403). A generic `VU1APIError` (HTTP 500 or a 200 + `status:"fail"`) keeps
+  `authenticated=True` and reports via `error` — it's a server fault, not a bad key.
+- `dials`: the dial list on full success, else `[]`.
+- `error`: `None` on full success, else `str(err)`.
+
+Callers map `connected=False` → `CannotConnect` and `authenticated=False` →
+`InvalidAuth` (config flow) / `ConfigEntryAuthFailed` (coordinator).
 
 **Add-on Discovery:**
 ```python
 async def discover_vu1_addon() -> dict[str, Any]
 ```
-Queries Supervisor API at `http://supervisor/addons` to find VU1 Server add-on.
+Queries the Supervisor API at `http://supervisor/addons` (Bearer `SUPERVISOR_TOKEN`)
+to find the `vu-server-addon` slug, then reads `/addons/{slug}/info` and returns the
+add-on's stable DNS **`hostname`** (falling back to `ip_address`) plus port `5340`.
+Returns `{}` when there is no Supervisor token or no running add-on.
 
 ### `coordinator.py` - Data Update Coordinator
 
@@ -165,18 +206,27 @@ async def _async_setup(self) -> None:
     """Perform one-time setup during first refresh."""
     connection_result = await self.client.test_connection()
     if not connection_result["connected"]:
-        raise UpdateFailed(...)  # Converted to ConfigEntryNotReady
+        raise UpdateFailed(...)              # -> ConfigEntryNotReady (retry)
+    if not connection_result["authenticated"]:
+        raise ConfigEntryAuthFailed(...)     # -> starts a reauth flow
 ```
-Called automatically during `async_config_entry_first_refresh()`. Failures raise `UpdateFailed` which HA converts to `ConfigEntryNotReady`.
+Called automatically during `async_config_entry_first_refresh()`. A connection
+failure raises `UpdateFailed` (HA converts to `ConfigEntryNotReady`); a rejected
+key raises `ConfigEntryAuthFailed` so HA starts a reauth flow instead of retrying
+forever with a dead key.
 
-**Retry Backoff (HA 2025.11+):**
+**Update-loop error mapping (`_async_update_data`):**
 ```python
 except VU1AuthError as err:
-    raise UpdateFailed(f"Auth error: {err}", retry_after=300) from err  # 5 min
+    raise ConfigEntryAuthFailed(f"Authentication error: {err}") from err  # reauth
+except VU1ConnectionError as err:
+    raise UpdateFailed(f"Connection error: {err}") from err               # standard retry
 except VU1APIError as err:
-    raise UpdateFailed(f"API error: {err}", retry_after=60) from err    # 1 min
+    raise UpdateFailed(f"API error: {err}", retry_after=60) from err      # 1 min backoff
 ```
-The `retry_after` parameter (float, seconds) defers the next scheduled refresh when API signals backoff conditions.
+Auth failures during polling now raise `ConfigEntryAuthFailed` (triggering reauth),
+**not** `UpdateFailed(retry_after=300)`. Only generic API errors use `retry_after`
+(60s); connection errors use the coordinator's standard retry.
 
 **Data Structure:**
 ```python
@@ -212,24 +262,36 @@ self._name_change_grace_periods: dict[str, datetime] = {}
 self._grace_period_seconds = 10
 ```
 
-When a name change originates from HA:
-1. `mark_name_change_from_ha()` sets grace period
-2. Server updates ignored during grace period
-3. Grace period expires, normal sync resumes
+Flow:
+1. A rename in the HA UI fires `EVENT_DEVICE_REGISTRY_UPDATED`; the `__init__.py`
+   listener calls the **public** `coordinator.async_handle_ha_name_change(dial_uid, name)`,
+   which pushes the name to the server via `async_set_dial_name()`.
+2. `async_set_dial_name()` calls `mark_name_change_from_ha()` to open a grace period.
+3. The grace period is **only consulted in `_sync_name_from_server()`** (the
+   server→HA echo path) to drop the echo of HA's own change. `async_handle_ha_name_change`
+   deliberately does **no** grace check — it relies on a `_previous_dial_names`
+   comparison instead, so a second user rename inside the window still syncs.
+
+The integration never writes `name_by_user`, so there is no server→HA→server loop
+beyond the single echo the grace period suppresses.
 
 **Dynamic Dial Discovery:**
-Supports runtime discovery of new dials via callback registration:
+New dials are detected **inside `_async_update_data` on every poll** by diffing the
+freshly fetched UID set against `self._known_dial_uids`. Genuinely new UIDs schedule
+`async_notify_new_dials()` (run as a task so it executes after `self.data` is
+populated), which invokes registered callbacks. This covers dials provisioned
+**outside** HA (e.g. via the server web UI), not just the Provision button — the
+button simply forces a refresh.
+
+Platforms register an entity-creation callback via the `async_setup_dial_entities()`
+helper in `const.py`:
 ```python
-# Register callback (returns unsubscribe function)
 unsub = coordinator.register_new_dial_callback(async_add_new_dial_entities)
 config_entry.async_on_unload(unsub)
 
-# Callback signature
 async def async_add_new_dial_entities(new_dials: dict[str, Any]) -> None:
     """Create entities for newly discovered dials."""
 ```
-
-Platform setup modules register callbacks to create entities when the Provision button discovers new dials. The coordinator tracks known dial UIDs and notifies callbacks only for genuinely new dials.
 
 ### `sensor_binding.py` - Automatic Sensor Binding
 
@@ -317,13 +379,22 @@ config_manager.async_remove_listener(dial_uid, callback)
 from homeassistant.config_entries import ConfigFlowResult  # Not FlowResult!
 ```
 
-**Class: `ConfigFlow`**
+**Class: `ConfigFlow`** (`VERSION = 3`)
 
-Multi-step setup:
-1. `async_step_user()` - Choose connection type (add-on or manual)
-2. `async_step_addon()` - Enter API key for discovered add-on
-3. `async_step_manual()` - Enter host, port, API key manually
-4. `async_step_reconfigure()` - Change host/port/API key without removing integration
+Steps:
+1. `async_step_user()` - Choose connection type. `discover_vu1_addon()` runs first;
+   if the add-on is found an "VU1 Server Add-on" option is offered alongside "Manual".
+2. `async_step_addon()` - Enter **only the API key**; host/port come from discovery.
+3. `async_step_manual()` - Enter host, port, API key manually.
+4. `async_step_reconfigure()` - Change host/port/API key without removing the integration
+   (re-discovers the add-on host for add-on-managed entries).
+5. `async_step_reauth()` / `async_step_reauth_confirm()` - Triggered when the API key
+   is rejected (`ConfigEntryAuthFailed`); prompts for a new key and updates the entry.
+
+Duplicate prevention uses `_async_abort_entries_match` (on host/port for manual, on
+`addon_managed` for the add-on entry), **not** a host-based `unique_id`.
+`async_migrate_entry` handles v1→v2 (drop legacy ingress fields, fix port) and
+v2→v3 (re-key the hub device + clear the stale host-based `unique_id`; see below).
 
 **Reconfigure Flow (HA 2024.3+):**
 ```python
@@ -335,28 +406,37 @@ async def async_step_reconfigure(self, user_input=None) -> ConfigFlowResult:
 
 **Class: `OptionsFlowHandler`**
 
-Multi-step dial configuration:
-1. `async_step_init()` - Select dial and global settings (e.g., update_interval)
-2. `async_step_configure_dial()` - Choose update mode (auto/manual)
-3. `async_step_configure_automatic()` - Bind sensor with value range
-4. `async_step_configure_manual()` - Remove binding
+Multi-step flow:
+1. `async_step_init()` - Global options (`update_interval`, `timeout`) + optional dial picker
+2. `async_step_configure_dial()` - Choose `update_mode` or `upload_image`
+3. `async_step_configure_update_mode()` - Choose automatic/manual
+4. `async_step_configure_automatic()` - Bind a sensor with a value range
+5. `async_step_configure_manual()` - Remove binding
+6. `async_step_upload_image()` - Upload a background image (file selector)
 
-**OptionsFlow Pattern (HA 2025.12 breaking change):**
+**OptionsFlow Pattern:**
 ```python
-class OptionsFlowHandler(config_entries.OptionsFlow):
+class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
     def __init__(self) -> None:  # NO config_entry parameter!
         ...
     # Access via self.config_entry property (auto-provided)
 ```
 
-Global options (like `update_interval`) are preserved across dial configuration steps via `_collected_options`.
+Subclasses **`OptionsFlowWithReload`** (not plain `OptionsFlow`): the base class
+reloads the entry on save, so changed `update_interval`/`timeout` take effect
+immediately (the coordinator + client are re-created with the new values in
+`async_setup_entry`). Both `update_interval` **and** `timeout` are real, effective
+options — `update_interval` drives `coordinator.update_interval`; `timeout` is
+passed into `VU1APIClient`. The `__init__` takes **no** `config_entry` argument
+(HA 2025.12 breaking change); both options are preserved across the dial
+sub-steps via `_collected_options`.
 
 ### `diagnostics.py` - Integration Diagnostics
 
 Provides debug information downloadable from Settings > Devices & Services.
 
 ```python
-TO_REDACT = {"api_key", "supervisor_token", "ingress_slug"}
+TO_REDACT = {"api_key"}
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: VU1ConfigEntry,
@@ -455,11 +535,22 @@ Actions apply presets by name rather than raw period/step values.
 
 ```
 VU1 Server (hub)
-├── identifiers: {("vu1_dials", "vu1_server_{host}_{port}")}
+├── identifiers: {("vu1_dials", "vu1_server_{entry_id}")}
 └── Dial Device
     ├── identifiers: {("vu1_dials", "{dial_uid}")}
-    └── via_device: ("vu1_dials", server_identifier)
+    └── via_device: ("vu1_dials", "vu1_server_{entry_id}")
 ```
+
+The hub identifier is keyed on the **config entry id**, not `host:port`. Earlier
+versions keyed it on `host:port`, which churned (and orphaned the hub device) when
+the add-on's Docker IP / DNS hostname changed. The `v2→v3` migration in
+`async_migrate_entry` rewrites the existing hub device's identifier to
+`vu1_server_{entry_id}` (keeping the same `device.id` so child dials stay linked
+via `via_device`) and clears the now-unused host-based config-entry `unique_id`
+(duplicate prevention moved to `_async_abort_entries_match`). Dial devices are
+still identified by raw `dial_uid`. The `"vu1_server_"` prefix is how hub-vs-dial
+devices are distinguished throughout the code (e.g. in service target resolution
+and `async_remove_config_entry_device`).
 
 ---
 
@@ -475,12 +566,13 @@ VU1 Server (hub)
 ### Entity Development Pattern
 ```python
 class VU1ExampleEntity(VU1DialEntity, CoordinatorEntity, SensorEntity):
+    _attr_translation_key = "example"  # name comes from strings.json/en.json
+
     def __init__(self, coordinator, dial_uid: str, dial_data: dict) -> None:
         super().__init__(coordinator)
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{dial_uid}_example"
-        self._attr_name = "Example"
-        self._attr_has_entity_name = True
+        # _attr_has_entity_name = True is inherited from VU1DialEntity
 
     @property
     def native_value(self):
@@ -488,9 +580,18 @@ class VU1ExampleEntity(VU1DialEntity, CoordinatorEntity, SensorEntity):
 ```
 
 **Notes:**
-- `VU1DialEntity` mixin (from `const.py`) provides `device_info` automatically—do not define it in entity classes
-- `CoordinatorEntity` provides `should_poll = False` by default—do not override unless necessary
-- Always guard `coordinator.data` access (may be `None` before first refresh)
+- `VU1DialEntity` mixin (from `const.py`) provides `device_info` automatically and
+  sets `_attr_has_entity_name = True`—do not redefine either in entity classes.
+- **Entity names come from translation keys**, not hard-coded `_attr_name` strings.
+  Each entity sets `_attr_translation_key` (or, for `EntityDescription`-based
+  entities, `translation_key=`), and the display name lives under
+  `entity.<platform>.<key>.name` in `strings.json`/`translations/en.json`. Icons
+  live in `icons.json` keyed by the same translation key.
+- The **main dial-value number** is the device's primary feature, so it sets
+  `self._attr_name = None` (inherits the device name with no suffix) rather than a
+  translation key.
+- `CoordinatorEntity` provides `should_poll = False` by default—do not override unless necessary.
+- Always guard `coordinator.data` access (may be `None` before first refresh).
 
 ### Platform Setup Pattern
 Use `async_setup_dial_entities()` from `const.py` to eliminate boilerplate:
@@ -555,10 +656,13 @@ except VU1APIError as err:
     raise HomeAssistantError(f"Failed: {err}") from err
 ```
 
-**In Coordinator Update (with retry backoff):**
+**In Coordinator Update:**
 ```python
 except VU1AuthError as err:
-    raise UpdateFailed(f"Auth error: {err}", retry_after=300) from err
+    # Bad/revoked key -> start a reauth flow, don't back off forever
+    raise ConfigEntryAuthFailed(f"Authentication error: {err}") from err
+except VU1ConnectionError as err:
+    raise UpdateFailed(f"Connection error: {err}") from err
 except VU1APIError as err:
     raise UpdateFailed(f"API error: {err}", retry_after=60) from err
 ```
@@ -672,8 +776,11 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
 
 | File | Purpose |
 |------|---------|
-| `manifest.json` | Integration metadata, version, dependencies (requires HA 2025.12+) |
-| `diagnostics.py` | Debug data export with sensitive field redaction |
-| `services.yaml` | Service definitions for HA UI |
-| `translations/en.json` | UI strings for config/options/reconfigure flow |
-| `.storage/vu1_dials_dial_configs` | Persisted dial configurations |
+| `manifest.json` | Integration metadata: `integration_type: hub`, `dependencies: ["file_upload"]`, `after_dependencies: ["device_automation"]`, `iot_class: local_polling`. **No `homeassistant` key** — the minimum HA version (`2025.12.0`) is in `hacs.json`. |
+| `hacs.json` | HACS metadata; holds the minimum HA version (`2025.12.0`). |
+| `strings.json` | Source UI strings (config/options flow + entity names). |
+| `translations/en.json` | English translations; kept **byte-identical** to `strings.json`. |
+| `icons.json` | Per-entity icons keyed by `translation_key`. |
+| `diagnostics.py` | Debug data export with sensitive field redaction. |
+| `services.yaml` | Service definitions for HA UI. |
+| `.storage/vu1_dials_dial_configs` | Persisted dial configurations. |
