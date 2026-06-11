@@ -50,6 +50,8 @@ from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
 
 _LOGGER = logging.getLogger(__name__)
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 __all__ = [
     "async_setup",
     "async_setup_entry",

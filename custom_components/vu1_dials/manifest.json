@@ -1,14 +1,14 @@
 {
   "domain": "vu1_dials",
   "name": "Streacom VU1 Dials",
-  "version": "0.0.1",
-  "documentation": "https://github.com/leoherzog/home-assistant-vu1-devices",
-  "issue_tracker": "https://github.com/leoherzog/home-assistant-vu1-devices/issues",
-  "dependencies": ["file_upload"],
+  "after_dependencies": ["device_automation"],
   "codeowners": ["@leoherzog"],
-  "requirements": [],
   "config_flow": true,
-  "iot_class": "local_polling",
+  "dependencies": ["file_upload"],
+  "documentation": "https://github.com/leoherzog/home-assistant-vu1-devices",
   "integration_type": "hub",
-  "after_dependencies": ["device_automation"]
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/leoherzog/home-assistant-vu1-devices/issues",
+  "requirements": [],
+  "version": "0.0.1"
 }
