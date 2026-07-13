@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.number import NumberEntity
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import VU1DialEntity
+from .const import UPDATE_MODE_AUTOMATIC, UPDATE_MODE_MANUAL, VU1DialEntity
+from .coordinator import _get_dial_client_and_coordinator
 from .device_config import async_get_config_manager
 from .sensor_binding import async_get_binding_manager
 
@@ -34,7 +35,7 @@ class VU1ConfigEntityBase(VU1DialEntity, CoordinatorEntity):
     to ``CoordinatorEntity``.
     """
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str) -> None:
         """Initialize the config entity."""
         super().__init__(coordinator)
         self._dial_uid = dial_uid
@@ -94,8 +95,6 @@ class VU1ConfigEntityBase(VU1DialEntity, CoordinatorEntity):
             new_period: New period value, or None to use current config
             new_step: New step value, or None to use current config
         """
-        from . import _get_dial_client_and_coordinator
-        
         _LOGGER.debug("Attempting to apply %s easing config for %s", easing_type, self._dial_uid)
         result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
         
@@ -144,7 +143,6 @@ class VU1ConfigNumberDescription:
 
     key: str
     name: str
-    icon: str
     native_min_value: float
     native_max_value: float
     native_step: float
@@ -159,7 +157,6 @@ CONFIG_NUMBER_DESCRIPTIONS: tuple[VU1ConfigNumberDescription, ...] = (
     VU1ConfigNumberDescription(
         key="value_min",
         name="Value range minimum",
-        icon="mdi:numeric",
         native_min_value=-1000,
         native_max_value=1000,
         native_step=0.1,
@@ -169,7 +166,6 @@ CONFIG_NUMBER_DESCRIPTIONS: tuple[VU1ConfigNumberDescription, ...] = (
     VU1ConfigNumberDescription(
         key="value_max",
         name="Value range maximum",
-        icon="mdi:numeric",
         native_min_value=-1000,
         native_max_value=1000,
         native_step=0.1,
@@ -179,7 +175,6 @@ CONFIG_NUMBER_DESCRIPTIONS: tuple[VU1ConfigNumberDescription, ...] = (
     VU1ConfigNumberDescription(
         key="dial_easing_period",
         name="Dial easing period",
-        icon="mdi:timer",
         native_min_value=10,
         native_max_value=1000,
         native_step=10,
@@ -192,7 +187,6 @@ CONFIG_NUMBER_DESCRIPTIONS: tuple[VU1ConfigNumberDescription, ...] = (
     VU1ConfigNumberDescription(
         key="dial_easing_step",
         name="Dial easing step",
-        icon="mdi:stairs",
         native_min_value=1,
         native_max_value=100,
         native_step=1,
@@ -205,7 +199,6 @@ CONFIG_NUMBER_DESCRIPTIONS: tuple[VU1ConfigNumberDescription, ...] = (
     VU1ConfigNumberDescription(
         key="backlight_easing_period",
         name="Backlight easing period",
-        icon="mdi:timer",
         native_min_value=10,
         native_max_value=1000,
         native_step=10,
@@ -218,7 +211,6 @@ CONFIG_NUMBER_DESCRIPTIONS: tuple[VU1ConfigNumberDescription, ...] = (
     VU1ConfigNumberDescription(
         key="backlight_easing_step",
         name="Backlight easing step",
-        icon="mdi:stairs",
         native_min_value=1,
         native_max_value=100,
         native_step=1,
@@ -243,11 +235,10 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
         self,
         coordinator,
         dial_uid: str,
-        dial_data: dict[str, Any],
         description: VU1ConfigNumberDescription,
     ) -> None:
         """Initialize the configuration number."""
-        super().__init__(coordinator, dial_uid, dial_data)
+        super().__init__(coordinator, dial_uid)
         self._description = description
         self._attr_unique_id = f"{dial_uid}_{description.key}"
         # translation_key derives from the description key; the entity name comes
@@ -303,12 +294,14 @@ class VU1ConfigNumber(VU1ConfigEntityBase, NumberEntity):
 class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
     """Sensor showing current update mode."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str) -> None:
         """Initialize the update mode sensor."""
-        super().__init__(coordinator, dial_uid, dial_data)
+        super().__init__(coordinator, dial_uid)
         self._attr_unique_id = f"{dial_uid}_update_mode_status"
         self._attr_translation_key = "update_mode"
         self._attr_entity_category = None
+        self._attr_device_class = SensorDeviceClass.ENUM
+        self._attr_options = [UPDATE_MODE_AUTOMATIC, UPDATE_MODE_MANUAL]
 
     @property
     def native_value(self) -> str | None:
@@ -317,7 +310,7 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
             return None
 
         config = self._config_manager.get_dial_config(self._dial_uid)
-        return config.get("update_mode", "manual").title()
+        return config.get("update_mode", UPDATE_MODE_MANUAL)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -343,59 +336,49 @@ class VU1UpdateModeSensor(VU1ConfigEntityBase, SensorEntity):
 class VU1BoundEntitySensor(VU1ConfigEntityBase, SensorEntity):
     """Sensor showing currently bound entity."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str) -> None:
         """Initialize the bound entity sensor."""
-        super().__init__(coordinator, dial_uid, dial_data)
+        super().__init__(coordinator, dial_uid)
         self._attr_unique_id = f"{dial_uid}_bound_entity_status"
         self._attr_translation_key = "bound_entity"
         self._attr_entity_category = None
 
     @property
     def native_value(self) -> str | None:
-        """Return the currently bound entity."""
+        """Return the entity_id currently bound to the dial."""
         if not self.hass:
             return None
 
         config = self._config_manager.get_dial_config(self._dial_uid)
-        
+
         if config.get("update_mode") != "automatic":
-            return "Manual Update Mode"
-            
-        bound_entity = config.get("bound_entity")
-        if not bound_entity:
-            return "None"
-            
-        # Get friendly name if available
-        state = self.hass.states.get(bound_entity)
-        if state:
-            friendly_name = state.attributes.get("friendly_name")
-            if friendly_name:
-                return friendly_name
-                
-        return bound_entity
+            return None
+
+        return config.get("bound_entity")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         if not self.hass:
             return {}
-            
+
         config = self._config_manager.get_dial_config(self._dial_uid)
-        
+
         attrs = {
             "update_mode": config.get("update_mode", "manual"),
             "bound_entity_id": config.get("bound_entity"),
         }
-        
+
         # Add current sensor value if bound
         bound_entity = config.get("bound_entity")
         if bound_entity and config.get("update_mode") == "automatic":
             state = self.hass.states.get(bound_entity)
             if state:
                 attrs.update({
+                    "bound_entity_name": state.attributes.get("friendly_name"),
                     "sensor_state": state.state,
                     "sensor_unit": state.attributes.get("unit_of_measurement"),
                     "last_updated": state.last_updated.isoformat(),
                 })
-        
+
         return attrs

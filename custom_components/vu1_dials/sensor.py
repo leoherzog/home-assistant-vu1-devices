@@ -20,6 +20,16 @@ _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["async_setup_entry"]
 
+# Diagnostic sensors as (detailed_status data key, translation key) pairs. Each
+# instantiates VU1DiagnosticSensorBase directly; unique IDs and translation keys
+# derive from these values, so registry entities remain stable.
+DIAGNOSTIC_SENSORS: tuple[tuple[str, str], ...] = (
+    ("fw_version", "firmware_version"),
+    ("hw_version", "hardware_version"),
+    ("protocol_version", "protocol_version"),
+    ("fw_hash", "firmware_hash"),
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -31,14 +41,14 @@ async def async_setup_entry(
 
     def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
         return [
-            VU1DialSensor(coordinator, dial_uid, dial_info),
-            VU1UpdateModeSensor(coordinator, dial_uid, dial_info),
-            VU1BoundEntitySensor(coordinator, dial_uid, dial_info),
-            VU1ServerNameSensor(coordinator, dial_uid, dial_info),
-            VU1FirmwareVersionSensor(coordinator, dial_uid, dial_info),
-            VU1HardwareVersionSensor(coordinator, dial_uid, dial_info),
-            VU1ProtocolVersionSensor(coordinator, dial_uid, dial_info),
-            VU1FirmwareHashSensor(coordinator, dial_uid, dial_info),
+            VU1DialSensor(coordinator, dial_uid),
+            VU1UpdateModeSensor(coordinator, dial_uid),
+            VU1BoundEntitySensor(coordinator, dial_uid),
+            VU1ServerNameSensor(coordinator, dial_uid),
+            *(
+                VU1DiagnosticSensorBase(coordinator, dial_uid, data_key, translation_key)
+                for data_key, translation_key in DIAGNOSTIC_SENSORS
+            ),
         ]
 
     async_setup_dial_entities(
@@ -53,7 +63,6 @@ class VU1DialSensor(VU1DialEntity, CoordinatorEntity, SensorEntity):
         self,
         coordinator: "VU1DataUpdateCoordinator",
         dial_uid: str,
-        dial_data: dict[str, Any],
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
@@ -104,23 +113,9 @@ class VU1DialSensor(VU1DialEntity, CoordinatorEntity, SensorEntity):
 
         attributes["dial_name"] = dial_data.get("dial_name")
 
-        # Add backlight color information from detailed status
-        detailed_status = dial_data.get("detailed_status", {})
-        backlight = detailed_status.get("backlight", {})
-        if backlight:
-            attributes.update({
-                "backlight_red": backlight.get("red"),
-                "backlight_green": backlight.get("green"),
-                "backlight_blue": backlight.get("blue"),
-            })
-
         # Add image file info if available
         if "image_file" in dial_data:
             attributes["image_file"] = dial_data["image_file"]
-
-        # Include full detailed status for advanced users
-        if detailed_status:
-            attributes["detailed_status"] = detailed_status
 
         return attributes
 
@@ -128,13 +123,13 @@ class VU1DialSensor(VU1DialEntity, CoordinatorEntity, SensorEntity):
 class VU1DiagnosticSensorBase(VU1DialEntity, CoordinatorEntity, SensorEntity):
     """Base class for VU1 diagnostic sensors."""
 
-    def __init__(self, coordinator: "VU1DataUpdateCoordinator", dial_uid: str, dial_data: dict[str, Any], attr_name: str, translation_key: str) -> None:
+    def __init__(self, coordinator: "VU1DataUpdateCoordinator", dial_uid: str, data_key: str, translation_key: str) -> None:
         """Initialize the diagnostic sensor."""
         super().__init__(coordinator)
         self._dial_uid = dial_uid
-        self._data_key = attr_name  # Store API lookup key separately
-        # attr_name is already a lowercase snake_case API key (e.g. "fw_version").
-        self._attr_unique_id = f"{dial_uid}_{attr_name}"
+        # data_key is already a lowercase snake_case API key (e.g. "fw_version").
+        self._data_key = data_key
+        self._attr_unique_id = f"{dial_uid}_{data_key}"
         self._attr_translation_key = translation_key
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_entity_registry_enabled_default = False
@@ -153,42 +148,10 @@ class VU1DiagnosticSensorBase(VU1DialEntity, CoordinatorEntity, SensorEntity):
         return detailed_status.get(self._data_key)
 
 
-class VU1FirmwareVersionSensor(VU1DiagnosticSensorBase):
-    """Sensor for firmware version."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the firmware version sensor."""
-        super().__init__(coordinator, dial_uid, dial_data, "fw_version", "firmware_version")
-
-
-class VU1HardwareVersionSensor(VU1DiagnosticSensorBase):
-    """Sensor for hardware version."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the hardware version sensor."""
-        super().__init__(coordinator, dial_uid, dial_data, "hw_version", "hardware_version")
-
-
-class VU1ProtocolVersionSensor(VU1DiagnosticSensorBase):
-    """Sensor for protocol version."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the protocol version sensor."""
-        super().__init__(coordinator, dial_uid, dial_data, "protocol_version", "protocol_version")
-
-
-class VU1FirmwareHashSensor(VU1DiagnosticSensorBase):
-    """Sensor for firmware hash."""
-
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
-        """Initialize the firmware hash sensor."""
-        super().__init__(coordinator, dial_uid, dial_data, "fw_hash", "firmware_hash")
-
-
 class VU1ServerNameSensor(VU1DialEntity, CoordinatorEntity, SensorEntity):
     """Sensor showing the device name as stored on the VU-Server."""
 
-    def __init__(self, coordinator: "VU1DataUpdateCoordinator", dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, coordinator: "VU1DataUpdateCoordinator", dial_uid: str) -> None:
         """Initialize the server name sensor."""
         super().__init__(coordinator)
         self._dial_uid = dial_uid

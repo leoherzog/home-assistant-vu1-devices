@@ -16,7 +16,7 @@ from .vu1_api import VU1APIClient, VU1APIError, VU1ConnectionError, VU1AuthError
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["VU1DataUpdateCoordinator"]
+__all__ = ["VU1DataUpdateCoordinator", "_get_dial_client_and_coordinator"]
 
 
 class VU1DataUpdateCoordinator(DataUpdateCoordinator):
@@ -53,28 +53,6 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         # Track known dial UIDs for detecting new dials
         self._known_dial_uids: set[str] = set()
 
-    async def _async_setup(self) -> None:
-        """Perform one-time setup during first refresh.
-
-        This method is called during async_config_entry_first_refresh()
-        with proper error handling (ConfigEntryNotReady on failure).
-        """
-        # Verify initial connection is healthy
-        connection_result = await self.client.test_connection()
-        if not connection_result["connected"]:
-            raise UpdateFailed(
-                f"Cannot connect to VU1 server: {connection_result.get('error', 'Unknown')}"
-            )
-
-        if not connection_result["authenticated"]:
-            # Bad/revoked API key: trigger a reauth flow instead of retrying
-            # forever with credentials that will never work.
-            raise ConfigEntryAuthFailed(
-                f"Authentication failed: {connection_result.get('error', 'Invalid API key')}"
-            )
-
-        _LOGGER.debug("Coordinator initial setup completed successfully")
-
     def _prune_expired_grace_periods(self) -> None:
         """Remove expired entries from grace period dicts to prevent unbounded growth."""
         now = dt_util.utcnow()
@@ -97,6 +75,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             dial_data: dict[str, Any] = {}
             dial_refs: list[tuple[str, dict[str, Any]]] = []
             dial_tasks: list[Any] = []
+            crc_tasks: list[Any] = []
 
             for dial in dials:
                 if not isinstance(dial, dict) or "uid" not in dial:
@@ -106,13 +85,18 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 dial_uid = dial["uid"]
                 dial_refs.append((dial_uid, dial))
                 dial_tasks.append(self.client.get_dial_status(dial_uid))
+                crc_tasks.append(self.client.get_dial_image_crc(dial_uid))
 
-            if dial_tasks:
+            if dial_refs:
                 results = await asyncio.gather(*dial_tasks, return_exceptions=True)
+                crc_results = await asyncio.gather(*crc_tasks, return_exceptions=True)
             else:
                 results = []
+                crc_results = []
 
-            for (dial_uid, dial), result in zip(dial_refs, results):
+            for (dial_uid, dial), result, crc_result in zip(dial_refs, results, crc_results):
+                image_crc = None if isinstance(crc_result, BaseException) else crc_result
+
                 if isinstance(result, BaseException):
                     if isinstance(result, VU1APIError):
                         _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, result)
@@ -120,17 +104,19 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                         _LOGGER.debug("Status update cancelled for dial %s", dial_uid)
                     else:
                         _LOGGER.error("Unexpected error getting status for dial %s", dial_uid, exc_info=result)
-                    dial_data[dial_uid] = {**dial, "detailed_status": {}}
+                    dial_data[dial_uid] = {**dial, "detailed_status": {}, "image_crc": image_crc}
                     continue
 
                 status: dict[str, Any] = result
-                dial_data[dial_uid] = {**dial, "detailed_status": status}
+                dial_data[dial_uid] = {**dial, "detailed_status": status, "image_crc": image_crc}
 
                 await self._sync_name_from_server(dial_uid, dial.get("dial_name"))
                 await self._check_server_behavior_change(dial_uid, status)
 
             if self._binding_manager:
-                await self._binding_manager.async_update_bindings({"dials": dial_data})
+                await self._binding_manager.async_update_bindings(
+                    {"dials": dial_data}, self.config_entry.entry_id
+                )
 
             # Detect dials provisioned outside HA (e.g. via the server web UI).
             # Diff the freshly fetched UIDs against the known set and schedule
@@ -182,10 +168,6 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 self._new_dial_callbacks.remove(callback)
 
         return unsubscribe
-
-    def get_known_dial_uids(self) -> set[str]:
-        """Get the set of currently known dial UIDs."""
-        return self._known_dial_uids.copy()
 
     def update_known_dials(self, dial_uids: set[str]) -> None:
         """Update the set of known dial UIDs."""
@@ -352,3 +334,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             updated_config = {**current_config, **server_values}
             await config_manager.async_update_dial_config(dial_uid, updated_config)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
+
+
+def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tuple[VU1APIClient, VU1DataUpdateCoordinator] | None:
+    """Find the correct client and coordinator for a dial."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+            continue
+        coord = entry.runtime_data.coordinator
+        if coord.data and dial_uid in coord.data.get("dials", {}):
+            return entry.runtime_data.client, coord
+    return None

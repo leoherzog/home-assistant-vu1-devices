@@ -19,8 +19,9 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_TIMEOUT,
 )
-from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
+from .vu1_api import VU1APIClient, DEFAULT_PORT, discover_vu1_addon
 
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import device_registry as dr
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if discovered and discovered.get("addon_discovered"):
                 self._addon_available = True
                 self._discovered_host = discovered.get("host")
-                self._discovered_port = discovered.get("port", 5340)
+                self._discovered_port = discovered.get("port", DEFAULT_PORT)
                 
                 _LOGGER.info("VU1 Server add-on found at %s:%s", self._discovered_host, self._discovered_port)
             else:
@@ -111,7 +112,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema({
             vol.Required("host", default="localhost"): cv.string,
-            vol.Required("port", default=5340): cv.port,
+            vol.Required("port", default=DEFAULT_PORT): cv.port,
             vol.Required("api_key"): cv.string,
         })
 
@@ -172,17 +173,23 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Re-discover add-on IP if this is an addon-managed entry
         default_host = entry.data.get("host", "localhost")
-        default_port = entry.data.get("port", 5340)
+        default_port = entry.data.get("port", DEFAULT_PORT)
         if entry.data.get(CONF_ADDON_MANAGED):
             discovered = await discover_vu1_addon()
             if discovered and discovered.get("addon_discovered"):
                 default_host = discovered["host"]
-                default_port = discovered.get("port", 5340)
+                default_port = discovered.get("port", DEFAULT_PORT)
 
         if user_input is not None:
             # All reconfigure fields are vol.Required, so user_input always
             # carries host/port/api_key; merge straight over the existing data.
             updated_data = {**entry.data, **user_input}
+
+            # Prevent reconfiguring onto another entry's server. The current
+            # entry is auto-excluded during SOURCE_RECONFIGURE.
+            self._async_abort_entries_match(
+                {CONF_HOST: updated_data["host"], CONF_PORT: updated_data["port"]}
+            )
 
             try:
                 await validate_input(self.hass, updated_data)
@@ -613,33 +620,27 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         host=data["host"],
         port=data["port"],
         api_key=data["api_key"],
+        session=async_get_clientsession(hass),
     )
     connection_info = f"{data['host']}:{data['port']}"
 
-    try:
-        _LOGGER.debug("Testing connection to VU1 server at %s", connection_info)
-        
-        connection_result = await client.test_connection()
-        if not connection_result["connected"]:
-            _LOGGER.error("Connection failed: %s", connection_result.get("error", "Unknown error"))
-            raise CannotConnect(f"Cannot connect to VU1 server: {connection_result.get('error', 'Unknown error')}")
-        
-        if not connection_result["authenticated"]:
-            _LOGGER.error("API key validation failed: %s", connection_result.get("error", "Unknown error"))
-            raise InvalidAuth(f"Invalid API Key: {connection_result.get('error', 'Unknown error')}")
-        
-        dials = connection_result.get("dials", [])
-        _LOGGER.debug("Successfully connected to VU1 server, found %d dials", len(dials))
-        
-    except InvalidAuth:
-        raise
-    except VU1APIError as err:
-        _LOGGER.error("VU1 API error during validation: %s", err)
-        if "auth" in str(err).lower() or "key" in str(err).lower() or "forbidden" in str(err).lower():
-            raise InvalidAuth from err
-        raise CannotConnect from err
-    finally:
-        await client.close()
+    _LOGGER.debug("Testing connection to VU1 server at %s", connection_info)
+
+    connection_result = await client.test_connection()
+    if not connection_result["connected"]:
+        _LOGGER.error("Connection failed: %s", connection_result.get("error", "Unknown error"))
+        raise CannotConnect(f"Cannot connect to VU1 server: {connection_result.get('error', 'Unknown error')}")
+
+    if not connection_result["authenticated"]:
+        _LOGGER.error("API key validation failed: %s", connection_result.get("error", "Unknown error"))
+        raise InvalidAuth(f"Invalid API Key: {connection_result.get('error', 'Unknown error')}")
+
+    if connection_result["error"] is not None:
+        _LOGGER.error("Server-side error during validation: %s", connection_result["error"])
+        raise CannotConnect(f"Cannot connect to VU1 server: {connection_result['error']}")
+
+    dials = connection_result.get("dials", [])
+    _LOGGER.debug("Successfully connected to VU1 server, found %d dials", len(dials))
 
     return {
         "title": f"VU1 Server ({connection_info})",

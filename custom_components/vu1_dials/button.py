@@ -13,7 +13,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, VU1DialEntity, async_setup_dial_entities
-from .vu1_api import VU1APIClient
 
 if TYPE_CHECKING:
     from . import VU1ConfigEntry
@@ -30,15 +29,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up VU1 button entities."""
     coordinator = config_entry.runtime_data.coordinator
-    client = config_entry.runtime_data.client
 
     # Server-level entity (not per-dial) — added separately
-    async_add_entities([VU1ProvisionDialsButton(coordinator, client)])
+    async_add_entities([VU1ProvisionDialsButton(coordinator)])
 
     def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
         return [
-            VU1RefreshHardwareInfoButton(coordinator, client, dial_uid, dial_info),
-            VU1IdentifyDialButton(coordinator, client, dial_uid, dial_info),
+            VU1RefreshHardwareInfoButton(coordinator, dial_uid),
+            VU1IdentifyDialButton(coordinator, dial_uid),
         ]
 
     async_setup_dial_entities(
@@ -49,10 +47,9 @@ async def async_setup_entry(
 class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
     """Button to provision new dials detected by the VU1 server."""
 
-    def __init__(self, coordinator, client: VU1APIClient) -> None:
+    def __init__(self, coordinator) -> None:
         """Initialize the provision dials button."""
         super().__init__(coordinator)
-        self._client = client
         self._attr_unique_id = f"{coordinator.server_device_identifier}_provision_new_dials"
         self._attr_translation_key = "provision_new_dials"
         # Not a VU1DialEntity, so set has_entity_name here.
@@ -74,7 +71,7 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
             _LOGGER.info("Provisioning new dials via VU1 server")
 
             # Call the provision endpoint to detect and add new dials
-            result = await self._client.provision_new_dials()
+            result = await self.coordinator.client.provision_new_dials()
 
             # Await an immediate refresh (not the debounced async_request_refresh,
             # which only schedules within the 10s window). The coordinator's
@@ -95,10 +92,9 @@ class VU1ProvisionDialsButton(CoordinatorEntity, ButtonEntity):
 class VU1RefreshHardwareInfoButton(VU1DialEntity, CoordinatorEntity, ButtonEntity):
     """Button to refresh hardware information for a VU1 dial."""
 
-    def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str) -> None:
         """Initialize the refresh button."""
         super().__init__(coordinator)
-        self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{dial_uid}_refresh_hardware_info"
         self._attr_translation_key = "refresh_hardware_info"
@@ -110,7 +106,7 @@ class VU1RefreshHardwareInfoButton(VU1DialEntity, CoordinatorEntity, ButtonEntit
             _LOGGER.info("Refreshing hardware info for dial %s", self._dial_uid)
 
             # Call the reload endpoint to get fresh hardware data
-            await self._client.reload_dial(self._dial_uid)
+            await self.coordinator.client.reload_dial(self._dial_uid)
 
             # Trigger coordinator refresh to update all entities with new data
             await self.coordinator.async_request_refresh()
@@ -125,10 +121,9 @@ class VU1RefreshHardwareInfoButton(VU1DialEntity, CoordinatorEntity, ButtonEntit
 class VU1IdentifyDialButton(VU1DialEntity, CoordinatorEntity, ButtonEntity):
     """Button to identify a VU1 dial with white flash animation."""
 
-    def __init__(self, coordinator, client: VU1APIClient, dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str) -> None:
         """Initialize the identify button."""
         super().__init__(coordinator)
-        self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{dial_uid}_identify"
         self._attr_translation_key = "identify"
@@ -148,9 +143,9 @@ class VU1IdentifyDialButton(VU1DialEntity, CoordinatorEntity, ButtonEntity):
                 _LOGGER.info("Starting identify animation for dial %s", self._dial_uid)
 
                 # Flash sequence: white for 1s, off for 1s, then restore
-                await self._client.set_dial_backlight(self._dial_uid, 100, 100, 100)
+                await self.coordinator.client.set_dial_backlight(self._dial_uid, 100, 100, 100)
                 await asyncio.sleep(1.0)
-                await self._client.set_dial_backlight(self._dial_uid, 0, 0, 0)
+                await self.coordinator.client.set_dial_backlight(self._dial_uid, 0, 0, 0)
                 await asyncio.sleep(1.0)
 
                 # Restore original state
@@ -158,10 +153,10 @@ class VU1IdentifyDialButton(VU1DialEntity, CoordinatorEntity, ButtonEntity):
                     red = original_backlight.get("red", 0)
                     green = original_backlight.get("green", 0)
                     blue = original_backlight.get("blue", 0)
-                    await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
+                    await self.coordinator.client.set_dial_backlight(self._dial_uid, red, green, blue)
                 else:
                     red, green, blue = 0, 0, 0
-                    await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
+                    await self.coordinator.client.set_dial_backlight(self._dial_uid, red, green, blue)
 
                 # Optimistically write the restored color into coordinator data
                 # instead of polling: the server applies queued commands ~1s
@@ -176,12 +171,14 @@ class VU1IdentifyDialButton(VU1DialEntity, CoordinatorEntity, ButtonEntity):
                         red = original_backlight.get("red", 0)
                         green = original_backlight.get("green", 0)
                         blue = original_backlight.get("blue", 0)
-                        await self._client.set_dial_backlight(self._dial_uid, red, green, blue)
+                        await self.coordinator.client.set_dial_backlight(self._dial_uid, red, green, blue)
                         self._optimistically_restore_backlight(red, green, blue)
                     except Exception:
                         _LOGGER.error("Failed to restore original backlight state for dial %s", self._dial_uid)
 
-        self.hass.async_create_task(_run_identify())
+        self.coordinator.config_entry.async_create_background_task(
+            self.hass, _run_identify(), name=f"vu1_identify_{self._dial_uid}"
+        )
 
     def _optimistically_restore_backlight(self, red: int, green: int, blue: int) -> None:
         """Write the restored backlight into coordinator data and notify entities."""

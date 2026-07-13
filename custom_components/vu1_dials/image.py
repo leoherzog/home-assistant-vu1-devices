@@ -12,7 +12,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import VU1DialEntity, async_setup_dial_entities
-from .vu1_api import VU1APIClient
 
 if TYPE_CHECKING:
     from . import VU1ConfigEntry
@@ -29,10 +28,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up VU1 image entities."""
     coordinator = config_entry.runtime_data.coordinator
-    client = config_entry.runtime_data.client
 
     def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
-        return [VU1DialBackgroundImage(hass, coordinator, client, dial_uid, dial_info)]
+        return [VU1DialBackgroundImage(hass, coordinator, dial_uid)]
 
     async_setup_dial_entities(
         coordinator, config_entry, async_add_entities, entity_factory,
@@ -42,16 +40,16 @@ async def async_setup_entry(
 class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
     """Image entity showing the current background image of a VU1 dial."""
 
-    def __init__(self, hass: HomeAssistant, coordinator, client: VU1APIClient, dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, hass: HomeAssistant, coordinator, dial_uid: str) -> None:
         """Initialize the dial background image entity."""
         CoordinatorEntity.__init__(self, coordinator)
         ImageEntity.__init__(self, hass)
-        self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{dial_uid}_background_image"
         self._attr_translation_key = "background_image"
         self._cached_image: bytes | None = None
         self._last_image_file: str | None = None
+        self._last_image_crc: int | None = None
         self._image_last_updated: datetime | None = None
         self._content_type: str | None = None
 
@@ -60,24 +58,29 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
         try:
             # Check if we need to fetch a new image
             current_image_file = self._get_current_image_file()
+            current_image_crc = self._get_current_image_crc()
 
             # If no image file is set, return None
             if not current_image_file:
                 _LOGGER.debug("No image file set for dial %s", self._dial_uid)
                 return None
 
-            # Check if we need to fetch new image data
+            # Check if we need to fetch new image data. The server always writes
+            # to the same img_{uid} path, so the CRC is the reliable signal that
+            # a re-uploaded background has actually changed.
             if (self._cached_image is None or
-                current_image_file != self._last_image_file):
+                current_image_file != self._last_image_file or
+                current_image_crc != self._last_image_crc):
 
                 _LOGGER.info("Fetching background image for dial %s", self._dial_uid)
 
                 # Fetch image from VU1 server
-                image_data = await self._client.get_dial_image(self._dial_uid)
+                image_data = await self.coordinator.client.get_dial_image(self._dial_uid)
 
                 if image_data:
                     self._cached_image = image_data
                     self._last_image_file = current_image_file
+                    self._last_image_crc = current_image_crc
                     self._image_last_updated = dt_util.utcnow()
                     self._content_type = self._sniff_content_type(image_data)
                     _LOGGER.debug("Successfully fetched image for dial %s (%d bytes)",
@@ -109,6 +112,14 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
         # Fallback to detailed status
         detailed_status = dial_data.get("detailed_status", {})
         return detailed_status.get("image_file")
+
+    def _get_current_image_crc(self) -> int | None:
+        """Get the current image CRC from coordinator data."""
+        if not self.coordinator.data:
+            return None
+
+        dial_data = self.coordinator.data.get("dials", {}).get(self._dial_uid, {})
+        return dial_data.get("image_crc")
 
     @staticmethod
     def _sniff_content_type(image_data: bytes) -> str:
@@ -168,6 +179,15 @@ class VU1DialBackgroundImage(VU1DialEntity, CoordinatorEntity, ImageEntity):
                 self._last_image_file = None
                 # Signal a fresh image (not None, which would read as unknown)
                 # so picture cards refetch instead of showing a broken image.
+                self._image_last_updated = dt_util.utcnow()
+
+            # The CRC is the reliable change signal: the server clears
+            # image_changed within ~1s and always reuses the same image_file
+            # path, so a re-uploaded background only shows up as a new CRC.
+            current_image_crc = self._get_current_image_crc()
+            if current_image_crc is not None and current_image_crc != self._last_image_crc:
+                _LOGGER.debug("Image CRC changed for dial %s, clearing cache", self._dial_uid)
+                self._cached_image = None
                 self._image_last_updated = dt_util.utcnow()
 
             # Also check if image file path changed

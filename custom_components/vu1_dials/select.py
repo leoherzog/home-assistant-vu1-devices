@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import BEHAVIOR_PRESETS, async_setup_dial_entities
@@ -30,7 +29,7 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data.coordinator
 
     def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
-        return [VU1BehaviorSelect(coordinator, dial_uid, dial_info)]
+        return [VU1BehaviorSelect(coordinator, dial_uid)]
 
     async_setup_dial_entities(
         coordinator, config_entry, async_add_entities, entity_factory,
@@ -40,20 +39,17 @@ async def async_setup_entry(
 class VU1BehaviorSelect(VU1ConfigEntityBase, SelectEntity):
     """Select entity for dial behavior presets."""
 
-    def __init__(self, coordinator, dial_uid: str, dial_data: dict[str, Any]) -> None:
+    def __init__(self, coordinator, dial_uid: str) -> None:
         """Initialize the behavior select entity."""
         # VU1ConfigEntityBase provides the config-change listener lifecycle,
         # device_info, availability, and the CONFIG entity category.
-        super().__init__(coordinator, dial_uid, dial_data)
+        super().__init__(coordinator, dial_uid)
         self._attr_unique_id = f"{dial_uid}_behavior_preset"
         self._attr_translation_key = "behavior_preset"
-        # Option values are the human-readable preset names ("Responsive",
-        # "Balanced", ...) and double as the reported entity state. They are
-        # intentionally NOT migrated to snake_case slugs: doing so would change
-        # the entity's state value (a behavior change). HA only applies
-        # entity.select.<key>.state.<option> translations when the option
-        # values are snake_case, so the option labels remain as-is here.
-        self._attr_options = [preset["name"] for preset in BEHAVIOR_PRESETS.values()]
+        # Option values are the snake_case preset slugs ("responsive",
+        # "balanced", ...) so HA applies the entity.select.<key>.state.<option>
+        # translations for the reported state.
+        self._attr_options = list(BEHAVIOR_PRESETS.keys())
 
     @property
     def current_option(self) -> str:
@@ -78,23 +74,26 @@ class VU1BehaviorSelect(VU1ConfigEntityBase, SelectEntity):
                     config_dial_step == preset_data["dial_easing_step"] and
                     config_backlight_period == preset_data["backlight_easing_period"] and
                     config_backlight_step == preset_data["backlight_easing_step"]):
-                    return preset_data["name"]
+                    return preset_key
             except (ValueError, TypeError):
                 # If any conversion fails, skip this preset comparison
                 continue
 
-        return "Custom"
+        return "custom"
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
-        # Find the preset configuration
-        preset_config = None
-        for preset_key, preset_data in BEHAVIOR_PRESETS.items():
-            if preset_data["name"] == option:
-                preset_config = preset_data
-                break
+        # Accept the snake_case slug; also map legacy display names
+        # ("Responsive") so automations from before the slug migration resolve.
+        preset_key = option
+        if preset_key not in BEHAVIOR_PRESETS:
+            preset_key = next(
+                (key for key, data in BEHAVIOR_PRESETS.items() if data["name"] == option),
+                option,
+            )
 
-        if not preset_config or option == "Custom":
+        preset_config = BEHAVIOR_PRESETS.get(preset_key)
+        if not preset_config or preset_key == "custom":
             # Custom option selected, don't change values
             return
 
@@ -111,9 +110,19 @@ class VU1BehaviorSelect(VU1ConfigEntityBase, SelectEntity):
 
         # Apply to hardware first; only persist the preset if the dial accepts
         # it, so a failure doesn't leave the UI showing a preset the hardware
-        # never received. _apply_easing_config raises HomeAssistantError on
-        # failure (config is left untouched, so current_option is unchanged).
-        await self._apply_easing_config(preset_config)
+        # never received. _apply_easing_config_to_server raises
+        # HomeAssistantError on failure (config is left untouched, so
+        # current_option is unchanged).
+        await self._apply_easing_config_to_server(
+            "dial",
+            preset_config["dial_easing_period"],
+            preset_config["dial_easing_step"],
+        )
+        await self._apply_easing_config_to_server(
+            "backlight",
+            preset_config["backlight_easing_period"],
+            preset_config["backlight_easing_step"],
+        )
         await config_manager.async_update_dial_config(self._dial_uid, config_updates)
 
         # Update sensor bindings if needed
@@ -128,36 +137,7 @@ class VU1BehaviorSelect(VU1ConfigEntityBase, SelectEntity):
         # poll would return stale easing values.
         self.async_write_ha_state()
 
-        _LOGGER.info("Applied %s behavior preset to dial %s", option, self._dial_uid)
-
-    async def _apply_easing_config(self, preset_config: dict[str, Any]) -> None:
-        """Apply easing configuration to the server, raising on failure."""
-        from . import _get_dial_client_and_coordinator
-        result = _get_dial_client_and_coordinator(self.hass, self._dial_uid)
-        if not result:
-            raise HomeAssistantError(
-                f"Cannot communicate with dial {self._dial_uid}"
-            )
-
-        client, coordinator = result
-        # Mark grace period to prevent sync loops
-        coordinator.mark_behavior_change_from_ha(self._dial_uid)
-        try:
-            # Apply dial easing
-            await client.set_dial_easing(
-                self._dial_uid,
-                preset_config["dial_easing_period"],
-                preset_config["dial_easing_step"],
-            )
-            # Apply backlight easing
-            await client.set_backlight_easing(
-                self._dial_uid,
-                preset_config["backlight_easing_period"],
-                preset_config["backlight_easing_step"],
-            )
-        except Exception as err:
-            _LOGGER.error("Failed to apply behavior preset for %s: %s", self._dial_uid, err)
-            raise HomeAssistantError(f"Failed to apply behavior preset: {err}")
+        _LOGGER.info("Applied %s behavior preset to dial %s", preset_key, self._dial_uid)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -169,7 +149,7 @@ class VU1BehaviorSelect(VU1ConfigEntityBase, SelectEntity):
         current = self.current_option
         description = "Custom configuration"
         for preset_key, preset_data in BEHAVIOR_PRESETS.items():
-            if preset_data["name"] == current:
+            if preset_key == current:
                 description = preset_data["description"]
                 break
 

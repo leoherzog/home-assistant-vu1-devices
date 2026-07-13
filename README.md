@@ -143,22 +143,25 @@ data:
 ```yaml
 # Set dial value
 service: vu1_dials.set_dial_value
+target:
+  entity_id: number.cpu_dial_value
 data:
-  dial_uid: "590056000650564139323920"
   value: 50
 
 # Set backlight to orange
 service: vu1_dials.set_dial_backlight
+target:
+  entity_id: light.cpu_dial_backlight
 data:
-  dial_uid: "590056000650564139323920"
   red: 100
   green: 50
   blue: 0
 
 # Set background image
 service: vu1_dials.set_dial_image
+target:
+  entity_id: image.cpu_dial_background
 data:
-  dial_uid: "590056000650564139323920"
   media_content_id: "media-source://media_source/local/dial_backgrounds/cpu.png"
 ```
 

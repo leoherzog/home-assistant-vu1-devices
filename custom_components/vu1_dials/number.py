@@ -10,7 +10,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, VU1DialEntity, async_setup_dial_entities
-from .vu1_api import VU1APIClient
 from .config_entities import CONFIG_NUMBER_DESCRIPTIONS, VU1ConfigNumber
 
 if TYPE_CHECKING:
@@ -28,13 +27,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up VU1 number entities."""
     coordinator = config_entry.runtime_data.coordinator
-    client = config_entry.runtime_data.client
 
     def entity_factory(dial_uid: str, dial_info: dict[str, Any]) -> list:
         return [
-            VU1DialNumber(coordinator, client, dial_uid, dial_info),
+            VU1DialNumber(coordinator, dial_uid),
             *(
-                VU1ConfigNumber(coordinator, dial_uid, dial_info, description)
+                VU1ConfigNumber(coordinator, dial_uid, description)
                 for description in CONFIG_NUMBER_DESCRIPTIONS
             ),
         ]
@@ -50,13 +48,10 @@ class VU1DialNumber(VU1DialEntity, CoordinatorEntity, NumberEntity):
     def __init__(
         self,
         coordinator: "VU1DataUpdateCoordinator",
-        client: VU1APIClient,
         dial_uid: str,
-        dial_data: dict[str, Any],
     ) -> None:
         """Initialize the number entity."""
         super().__init__(coordinator)
-        self._client = client
         self._dial_uid = dial_uid
         self._attr_unique_id = f"{DOMAIN}_dial_{dial_uid}"
         # Main-feature convention: the dial value is the device's primary
@@ -87,7 +82,7 @@ class VU1DialNumber(VU1DialEntity, CoordinatorEntity, NumberEntity):
             await self._switch_to_manual_mode_if_needed()
 
             # Set the dial value
-            await self._client.set_dial_value(self._dial_uid, int(value))
+            await self.coordinator.client.set_dial_value(self._dial_uid, int(value))
 
             # Optimistically update coordinator data to avoid UI flicker.
             # The VU1 server queues commands and applies them asynchronously,

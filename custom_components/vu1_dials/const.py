@@ -7,6 +7,8 @@ from homeassistant.const import Platform
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .vu1_api import DEFAULT_PORT, DEFAULT_TIMEOUT
+
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.helpers.entity import Entity
@@ -30,10 +32,8 @@ CONF_BACKLIGHT_EASING = "backlight_easing"
 CONF_UPDATE_MODE = "update_mode"
 
 # Default values
-DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 5340
+# DEFAULT_PORT and DEFAULT_TIMEOUT are re-exported from vu1_api (the single source).
 DEFAULT_UPDATE_INTERVAL = 30
-DEFAULT_TIMEOUT = 10
 
 # Platforms
 PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.LIGHT, Platform.SELECT, Platform.BUTTON, Platform.IMAGE]

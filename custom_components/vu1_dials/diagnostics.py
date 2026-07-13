@@ -7,7 +7,6 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import VU1ConfigEntry
-from .const import DOMAIN
 from .device_config import async_get_config_manager
 
 TO_REDACT = {

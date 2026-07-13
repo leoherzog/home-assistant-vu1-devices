@@ -130,7 +130,11 @@
         "name": "Value"
       },
       "update_mode": {
-        "name": "Update mode"
+        "name": "Update mode",
+        "state": {
+          "automatic": "Automatic",
+          "manual": "Manual"
+        }
       },
       "bound_entity": {
         "name": "Bound entity"
@@ -182,6 +186,20 @@
       "background_image": {
         "name": "Background image"
       }
+    }
+  },
+  "device_automation": {
+    "action_type": {
+      "configure_dial": "Configure dial"
+    },
+    "extra_fields": {
+      "bound_entity": "Bound sensor entity",
+      "value_min": "Minimum value",
+      "value_max": "Maximum value",
+      "backlight_color": "Backlight color (RGB, 0-100)",
+      "dial_easing": "Dial easing preset",
+      "backlight_easing": "Backlight easing preset",
+      "update_mode": "Update mode"
     }
   }
 }

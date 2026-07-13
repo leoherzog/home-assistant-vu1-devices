@@ -13,8 +13,6 @@ from .const import (
     CONF_VALUE_MIN,
     CONF_VALUE_MAX,
     CONF_BACKLIGHT_COLOR,
-    CONF_DIAL_EASING,
-    CONF_BACKLIGHT_EASING,
     CONF_UPDATE_MODE,
     DEFAULT_VALUE_MIN,
     DEFAULT_VALUE_MAX,
@@ -112,8 +110,6 @@ class VU1DialConfigManager:
             CONF_VALUE_MIN: DEFAULT_VALUE_MIN,
             CONF_VALUE_MAX: DEFAULT_VALUE_MAX,
             CONF_BACKLIGHT_COLOR: list(DEFAULT_BACKLIGHT_COLOR),  # Convert tuple to list for storage
-            CONF_DIAL_EASING: "linear",
-            CONF_BACKLIGHT_EASING: "linear",
             CONF_UPDATE_MODE: DEFAULT_UPDATE_MODE,
             "dial_easing_period": 50,
             "dial_easing_step": 5,

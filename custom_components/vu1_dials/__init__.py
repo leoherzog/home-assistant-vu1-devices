@@ -13,8 +13,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback, Event
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import EVENT_DEVICE_REGISTRY_UPDATED, EventDeviceRegistryUpdatedData
+from homeassistant.helpers.target import TargetSelection, async_extract_referenced_entity_ids
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -45,8 +46,8 @@ from .const import (
     ATTR_NAME,
     ATTR_MEDIA_CONTENT_ID,
 )
-from .coordinator import VU1DataUpdateCoordinator
-from .vu1_api import VU1APIClient, VU1APIError, discover_vu1_addon
+from .coordinator import VU1DataUpdateCoordinator, _get_dial_client_and_coordinator
+from .vu1_api import VU1APIClient, VU1APIError, VU1InvalidNameError, discover_vu1_addon
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -172,8 +173,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     # is still how dial-vs-hub devices are distinguished elsewhere.
     device_identifier = f"vu1_server_{entry.entry_id}"
 
-    # Connection validation is handled by coordinator._async_setup during first refresh
-    # which automatically raises ConfigEntryNotReady on failure
+    # Connection validation happens during async_config_entry_first_refresh below,
+    # whose _async_update_data raises ConfigEntryNotReady if the server is unreachable.
 
     update_interval = timedelta(
         seconds=entry.options.get("update_interval", DEFAULT_UPDATE_INTERVAL)
@@ -187,12 +188,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
     from .device_config import async_get_config_manager
     config_manager = async_get_config_manager(hass)
     await config_manager.async_load()
-    
+
     # Set up sensor binding manager before first data refresh
     from .sensor_binding import async_get_binding_manager
     binding_manager = async_get_binding_manager(hass)
-    await binding_manager.async_setup()
-    
+
     # Connect binding manager to coordinator
     coordinator.set_binding_manager(binding_manager)
     
@@ -255,8 +255,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
                 # This is a dial device
                 dial_uid = identifier_value
                 new_name = device.name_by_user or device.name
-                hass.async_create_task(
-                    coordinator.async_handle_ha_name_change(dial_uid, new_name)
+                entry.async_create_background_task(
+                    hass,
+                    coordinator.async_handle_ha_name_change(dial_uid, new_name),
+                    f"vu1_name_change_{dial_uid}",
                 )
                 break
     
@@ -269,7 +271,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
 
     if coordinator.data:
         dials_data = coordinator.data.get("dials", {})
-        await binding_manager.async_update_bindings({"dials": dials_data})
+        await binding_manager.async_update_bindings({"dials": dials_data}, entry.entry_id)
 
     return True
 
@@ -342,67 +344,24 @@ async def async_remove_config_entry_device(
 
 
 def _resolve_dial_uids_from_call(hass: HomeAssistant, call: ServiceCall) -> list[str]:
-    """Resolve dial UIDs from a service call's target devices.
+    """Resolve dial UIDs from a service call's target selection.
 
-    Handles all target selector types: device_id, entity_id, area_id,
-    floor_id (resolved via areas), and label_id (resolved via device labels).
+    Expands device_id/entity_id/area_id/floor_id/label_id targets via the
+    target helper (which correctly handles entities individually assigned to an
+    area), then maps the referenced devices back to VU1 dial UIDs.
     """
+    selected = async_extract_referenced_entity_ids(hass, TargetSelection(call.data))
+
     device_registry = dr.async_get(hass)
-    device_ids: set[str] = set()
+    entity_registry = er.async_get(hass)
 
-    # Direct device_id targets
-    raw_device_ids = call.data.get("device_id", [])
-    if isinstance(raw_device_ids, str):
-        raw_device_ids = [raw_device_ids]
-    device_ids.update(raw_device_ids)
-
-    # Resolve entity_id targets to device_ids
-    raw_entity_ids = call.data.get("entity_id", [])
-    if isinstance(raw_entity_ids, str):
-        raw_entity_ids = [raw_entity_ids]
-    if raw_entity_ids:
-        entity_registry = er.async_get(hass)
-        for entity_id in raw_entity_ids:
-            entry = entity_registry.async_get(entity_id)
-            if entry and entry.device_id:
-                device_ids.add(entry.device_id)
-            else:
-                _LOGGER.warning("Entity %s not found or has no device, skipping", entity_id)
-
-    # Resolve area_id targets to device_ids
-    raw_area_ids = call.data.get("area_id", [])
-    if isinstance(raw_area_ids, str):
-        raw_area_ids = [raw_area_ids]
-
-    # Resolve floor_id targets to area_ids first
-    raw_floor_ids = call.data.get("floor_id", [])
-    if isinstance(raw_floor_ids, str):
-        raw_floor_ids = [raw_floor_ids]
-    if raw_floor_ids:
-        area_registry = ar.async_get(hass)
-        for floor_id in raw_floor_ids:
-            for area_entry in ar.async_entries_for_floor(area_registry, floor_id):
-                raw_area_ids.append(area_entry.id)
-
-    for area_id in raw_area_ids:
-        for device in dr.async_entries_for_area(device_registry, area_id):
-            for entry_id in device.config_entries:
-                entry = hass.config_entries.async_get_entry(entry_id)
-                if entry and entry.domain == DOMAIN:
-                    device_ids.add(device.id)
-                    break
-
-    # Resolve label_id targets to device_ids
-    raw_label_ids = call.data.get("label_id", [])
-    if isinstance(raw_label_ids, str):
-        raw_label_ids = [raw_label_ids]
-    for label_id in raw_label_ids:
-        for device in dr.async_entries_for_label(device_registry, label_id):
-            for entry_id in device.config_entries:
-                entry = hass.config_entries.async_get_entry(entry_id)
-                if entry and entry.domain == DOMAIN:
-                    device_ids.add(device.id)
-                    break
+    # Devices come directly from device/area/floor/label targets; add the device
+    # backing each referenced entity so entity_id targets resolve too.
+    device_ids: set[str] = set(selected.referenced_devices)
+    for entity_id in selected.referenced | selected.indirectly_referenced:
+        entity = entity_registry.async_get(entity_id)
+        if entity and entity.device_id:
+            device_ids.add(entity.device_id)
 
     if not device_ids:
         raise ServiceValidationError("No target device specified")
@@ -424,17 +383,6 @@ def _resolve_dial_uids_from_call(hass: HomeAssistant, call: ServiceCall) -> list
     if not dial_uids:
         raise ServiceValidationError("No valid VU1 dial devices in target selection")
     return dial_uids
-
-
-def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tuple[VU1APIClient, VU1DataUpdateCoordinator] | None:
-    """Find the correct client and coordinator for a dial."""
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
-            continue
-        coord = entry.runtime_data.coordinator
-        if coord.data and dial_uid in coord.data.get("dials", {}):
-            return entry.runtime_data.client, coord
-    return None
 
 
 async def _execute_dial_service(
@@ -575,6 +523,8 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
         try:
             await coordinator.async_set_dial_name(dial_uid, name)
+        except VU1InvalidNameError as err:
+            raise ServiceValidationError(str(err)) from err
         except Exception as err:
             _LOGGER.error("Service call failed to set dial name for %s: %s", dial_uid, err)
             raise

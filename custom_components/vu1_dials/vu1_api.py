@@ -10,7 +10,7 @@ from aiohttp import ClientError, ClientTimeout
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["VU1APIClient", "VU1APIError", "VU1ConnectionError", "VU1AuthError", "VU1DialOfflineError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT", "API_VERSION"]
+__all__ = ["VU1APIClient", "VU1APIError", "VU1ConnectionError", "VU1AuthError", "VU1DialOfflineError", "VU1InvalidNameError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT", "API_VERSION"]
 
 DEFAULT_PORT = 5340
 DEFAULT_TIMEOUT = 10
@@ -18,6 +18,10 @@ DEFAULT_TIMEOUT = 10
 # Exact message the VU1 server returns (HTTP 200 + status:"fail" on dial/set and
 # dial/status, HTTP 503 on setRaw/backlight/image) when a dial is offline.
 OFFLINE_MESSAGE = "Invalid dial_uid or device is offline."
+
+# Body prefix the server returns (HTTP 406) when a dial is missing on the
+# name/easing/calibrate endpoints.
+DEVICE_NOT_PRESENT_MESSAGE = "Device not present"
 
 
 class VU1APIError(Exception):
@@ -33,7 +37,11 @@ class VU1AuthError(VU1APIError):
 
 
 class VU1DialOfflineError(VU1APIError):
-    """Exception raised when a dial is offline (HTTP 503)."""
+    """Exception raised when a dial is offline (HTTP 503/406)."""
+
+
+class VU1InvalidNameError(VU1APIError):
+    """Exception raised when a dial name fails client-side validation."""
 
 
 API_VERSION = "v0"
@@ -102,7 +110,7 @@ class VU1APIClient:
         """
         if data.get("status") != "ok":
             message = data.get("message", "Unknown error")
-            if message == OFFLINE_MESSAGE:
+            if message == OFFLINE_MESSAGE or message.startswith(DEVICE_NOT_PRESENT_MESSAGE):
                 raise VU1DialOfflineError(f"Dial offline or unavailable: {message}")
             raise VU1APIError(f"API error: {message}")
 
@@ -111,6 +119,7 @@ class VU1APIClient:
         method: str,
         endpoint: str,
         params: dict[str, Any] | None = None,
+        data: aiohttp.FormData | None = None,
     ) -> dict[str, Any]:
         """Make an API request."""
         url = f"{self.base_url}/{endpoint}"
@@ -123,6 +132,7 @@ class VU1APIClient:
                 method,
                 url,
                 params=params,
+                data=data,
                 timeout=ClientTimeout(total=self.timeout),
             ) as response:
                 _LOGGER.debug("Response status: %s", response.status)
@@ -158,7 +168,7 @@ class VU1APIClient:
         """Convert aiohttp response errors to VU1 exception hierarchy."""
         if err.status in (401, 403):
             raise VU1AuthError(f"Authentication failed: {err.message}") from err
-        if err.status == 503:
+        if err.status in (503, 406):
             raise VU1DialOfflineError(f"Dial offline or unavailable: {err.message}") from err
         raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
 
@@ -262,11 +272,11 @@ class VU1APIClient:
         """
         self._validate_dial_uid(dial_uid)
         if not name or not isinstance(name, str):
-            raise ValueError("name must be a non-empty string")
+            raise VU1InvalidNameError("name must be a non-empty string")
         if not 3 <= len(name) <= 30:
-            raise ValueError(f"name must be 3-30 characters, got {len(name)}")
+            raise VU1InvalidNameError(f"name must be 3-30 characters, got {len(name)}")
         if not re.match(r'^[a-z0-9\-_ ]+$', name, re.IGNORECASE):
-            raise ValueError("name may only contain letters, digits, hyphens, underscores, and spaces")
+            raise VU1InvalidNameError("name may only contain letters, digits, hyphens, underscores, and spaces")
         await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/name", {"name": name})
 
     async def get_dial_image(self, dial_uid: str) -> bytes:
@@ -275,49 +285,23 @@ class VU1APIClient:
         response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/image/get")
         return response.get("data", b"")
 
+    async def get_dial_image_crc(self, dial_uid: str) -> str | None:
+        """Get the CRC32 of the dial's current background image."""
+        self._validate_dial_uid(dial_uid)
+        response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/image/crc")
+        return response.get("data")
+
     async def set_dial_image(self, dial_uid: str, image_data: bytes, content_type: str = "image/png") -> None:
         """Set dial background image via multipart form upload."""
         self._validate_dial_uid(dial_uid)
         if not image_data:
             raise ValueError("image_data cannot be empty")
-        
-        url = f"{self.base_url}/api/{API_VERSION}/dial/{dial_uid}/image/set"
-        params = self._auth_params()
 
-        # Create multipart form data
         form_data = aiohttp.FormData()
         form_data.add_field('imgfile', image_data, filename='background.png', content_type=content_type)
 
-        try:
-            _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(image_data))
-            async with self.session.request(
-                "POST",
-                url,
-                data=form_data,
-                params=params,
-                timeout=ClientTimeout(total=self.timeout),
-            ) as response:
-                _LOGGER.debug("Image upload response status: %s", response.status)
-
-                if response.status >= 400:
-                    try:
-                        error_body = await response.text()
-                        _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
-                    except Exception:
-                        _LOGGER.debug("Could not read error response body")
-
-                response.raise_for_status()
-
-                if response.content_type == "application/json":
-                    data = await response.json()
-                    self._check_json_status(data)
-
-                _LOGGER.debug("Successfully uploaded image to dial %s", dial_uid)
-                    
-        except aiohttp.ClientResponseError as err:
-            self._raise_for_status(err)
-        except (ClientError, asyncio.TimeoutError) as err:
-            raise VU1ConnectionError(f"Connection error: {err}") from err
+        _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(image_data))
+        await self._request("POST", f"api/{API_VERSION}/dial/{dial_uid}/image/set", data=form_data)
 
     async def reload_dial(self, dial_uid: str) -> None:
         """Reload dial configuration."""
@@ -347,7 +331,7 @@ class VU1APIClient:
         """
         try:
             response = await self._request("GET", f"api/{API_VERSION}/dial/provision", {"admin_key": self.api_key})
-            return response.get("data", {})
+            return response.get("data") or {}
         except VU1AuthError as err:
             raise VU1AuthError(
                 "Provisioning requires the VU1 Server master key. "
