@@ -16,7 +16,7 @@ A Home Assistant integration for [Streacom VU1](https://streacom.com/products/vu
 
 ## Requirements
 
-- Home Assistant 2026.9.0 or newer
+- Home Assistant 2026.8.0 or newer
 - A VU1 Server (add-on or standalone) reachable from Home Assistant
 - The server's master key or an API key
 

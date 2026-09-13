@@ -3,7 +3,7 @@
   "name": "Streacom VU1 Dials",
   "codeowners": ["@leoherzog"],
   "config_flow": true,
-  "dependencies": ["file_upload"],
+  "dependencies": ["file_upload", "media_source"],
   "documentation": "https://github.com/leoherzog/home-assistant-vu1-devices",
   "integration_type": "hub",
   "iot_class": "local_polling",

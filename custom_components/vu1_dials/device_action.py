@@ -86,7 +86,7 @@ async def async_call_action_from_config(
     hass: HomeAssistant,
     config: ConfigType,
     variables: TemplateVarsType,
-    context: Context,
+    context: Context | None,
 ) -> None:
     """Execute a device action."""
     await _async_configure_dial(hass, config)

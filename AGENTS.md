@@ -2,8 +2,9 @@
 
 Home Assistant custom integration `vu1_dials` (hub, `local_polling`, config entries only) for Streacom VU1 eInk dials. It drives dials through the VU1 Server HTTP API. There is no hardware access from HA and no test suite in this repo.
 
-- `manifest.json`: `single_config_entry: true` (one VU1 Server per HA), `dependencies: ["file_upload"]`. The minimum HA version (2026.9.0) is in `hacs.json`.
+- `manifest.json`: `single_config_entry: true` (one VU1 Server per HA), `dependencies: ["file_upload", "media_source"]`. The minimum HA version (2026.8.0) is in `hacs.json`; `DeviceInfo(via_device_id=...)` and `async_get_device_by_identifier` set that floor.
 - Target HA 2026.9, Python 3.14.
+- `icon.png` and `icon-full.png` are kept for reference only. HA does not read them; brand images come from home-assistant/brands.
 
 ## Layout
 

@@ -8,8 +8,8 @@ from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import EntityCategory
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers.entity import EntityCategory
 
 from .const import (
     CONF_UPDATE_MODE,
