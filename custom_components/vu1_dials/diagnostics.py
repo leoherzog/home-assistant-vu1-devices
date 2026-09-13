@@ -3,15 +3,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.diagnostics import async_redact_data
+from homeassistant.components.diagnostics import REDACTED, async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import VU1ConfigEntry
+from .const import CONF_API_KEY, CONF_HOST
 from .device_config import async_get_config_manager
 
-TO_REDACT = {
-    "api_key",
-}
+TO_REDACT = {CONF_API_KEY, CONF_HOST}
 
 
 async def async_get_config_entry_diagnostics(
@@ -28,17 +27,17 @@ async def async_get_config_entry_diagnostics(
     # Collect dial configuration from config manager
     config_manager = async_get_config_manager(hass)
 
-    dial_configs: dict[str, Any] = {}
-    for dial_uid in coordinator_data.get("dials", {}).keys():
-        dial_configs[dial_uid] = config_manager.get_dial_config(dial_uid)
+    dial_configs = {
+        dial_uid: config_manager.get_dial_config(dial_uid)
+        for dial_uid in coordinator_data.get("dials", {})
+    }
 
     # Build diagnostics payload
     diagnostics_data: dict[str, Any] = {
         "config_entry": {
             "entry_id": entry.entry_id,
-            "version": entry.version,
             "domain": entry.domain,
-            "title": entry.title,
+            "title": REDACTED,
             "data": async_redact_data(dict(entry.data), TO_REDACT),
             "options": async_redact_data(dict(entry.options), TO_REDACT),
         },
@@ -48,7 +47,7 @@ async def async_get_config_entry_diagnostics(
             "server_device_identifier": coordinator.server_device_identifier,
         },
         "dials": {},
-        "dial_configs": async_redact_data(dial_configs, TO_REDACT),
+        "dial_configs": dial_configs,
     }
 
     # Add per-dial information (redact sensitive data)
@@ -59,10 +58,6 @@ async def async_get_config_entry_diagnostics(
             "detailed_status": dial_data.get("detailed_status", {}),
         }
 
-    # Add binding manager state via its public accessor (avoid reading private
-    # internals from another module).
-    binding_manager = runtime_data.binding_manager
-    if binding_manager:
-        diagnostics_data["sensor_bindings"] = binding_manager.async_get_bindings_summary()
+    diagnostics_data["sensor_bindings"] = runtime_data.binding_manager.async_get_bindings_summary()
 
     return diagnostics_data

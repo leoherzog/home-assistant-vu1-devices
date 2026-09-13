@@ -1,5 +1,6 @@
 """VU1 API Client for communicating with VU1 server."""
-import asyncio
+from __future__ import annotations
+
 import logging
 import os
 import re
@@ -7,41 +8,37 @@ from typing import Any
 
 import aiohttp
 from aiohttp import ClientError, ClientTimeout
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["VU1APIClient", "VU1APIError", "VU1ConnectionError", "VU1AuthError", "VU1DialOfflineError", "VU1InvalidNameError", "discover_vu1_addon", "DEFAULT_PORT", "DEFAULT_TIMEOUT", "API_VERSION"]
+__all__ = ["DEFAULT_PORT", "DEFAULT_TIMEOUT", "VU1APIClient", "VU1APIError", "VU1AuthError", "VU1InvalidImageError", "VU1InvalidNameError", "discover_vu1_addon"]
 
 DEFAULT_PORT = 5340
 DEFAULT_TIMEOUT = 10
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
 
 # Exact message the VU1 server returns (HTTP 200 + status:"fail" on dial/set and
 # dial/status, HTTP 503 on setRaw/backlight/image) when a dial is offline.
 OFFLINE_MESSAGE = "Invalid dial_uid or device is offline."
 
-# Body prefix the server returns (HTTP 406) when a dial is missing on the
-# name/easing/calibrate endpoints.
-DEVICE_NOT_PRESENT_MESSAGE = "Device not present"
 
-
-class VU1APIError(Exception):
+class VU1APIError(HomeAssistantError):
     """Base exception for VU1 API errors."""
-
-
-class VU1ConnectionError(VU1APIError):
-    """Exception raised for connection/network errors."""
 
 
 class VU1AuthError(VU1APIError):
     """Exception raised for authentication errors (401/403)."""
 
 
-class VU1DialOfflineError(VU1APIError):
-    """Exception raised when a dial is offline (HTTP 503/406)."""
-
-
-class VU1InvalidNameError(VU1APIError):
+class VU1InvalidNameError(VU1APIError, ServiceValidationError):
     """Exception raised when a dial name fails client-side validation."""
+
+
+class VU1InvalidImageError(VU1APIError, ServiceValidationError):
+    """Exception raised when image data is not a PNG/JPEG of at most 2 MB."""
 
 
 API_VERSION = "v0"
@@ -52,10 +49,10 @@ class VU1APIClient:
 
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = DEFAULT_PORT,
-        api_key: str = "",
-        session: aiohttp.ClientSession | None = None,
+        host: str,
+        port: int,
+        api_key: str,
+        session: aiohttp.ClientSession,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         """Initialize VU1 API client."""
@@ -65,28 +62,6 @@ class VU1APIClient:
         self.timeout = timeout
         self.base_url = f"http://{host}:{port}"
         self._session = session
-        self._close_session = False
-
-    def _validate_dial_uid(self, dial_uid: str) -> None:
-        """Validate dial_uid parameter."""
-        if not dial_uid or not isinstance(dial_uid, str):
-            raise ValueError("dial_uid must be a non-empty string")
-
-    @property
-    def session(self) -> aiohttp.ClientSession:
-        """Get aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=ClientTimeout(total=self.timeout)
-            )
-            self._close_session = True
-        return self._session
-
-    async def close(self) -> None:
-        """Close the session."""
-        if self._session and self._close_session:
-            await self._session.close()
-            self._session = None
 
     def _auth_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Return request params with the VU1 API key attached.
@@ -101,135 +76,61 @@ class VU1APIClient:
         return params
 
     @staticmethod
-    def _check_json_status(data: dict[str, Any]) -> None:
+    def _check_json_status(payload: dict[str, Any]) -> None:
         """Raise the matching exception for a non-ok VU1 JSON payload.
 
         The server signals an offline dial with HTTP 200 + status:"fail" and the
         ``OFFLINE_MESSAGE`` body on dial/set and dial/status, so detect it here
-        and surface it as ``VU1DialOfflineError`` rather than a generic error.
+        and surface it with the ``dial_offline`` message rather than a generic one.
         """
-        if data.get("status") != "ok":
-            message = data.get("message", "Unknown error")
-            if message == OFFLINE_MESSAGE or message.startswith(DEVICE_NOT_PRESENT_MESSAGE):
-                raise VU1DialOfflineError(f"Dial offline or unavailable: {message}")
-            raise VU1APIError(f"API error: {message}")
+        if payload.get("status") != "ok":
+            message = str(payload.get("message") or "Unknown error")
+            if message == OFFLINE_MESSAGE:
+                raise VU1APIError(translation_domain=DOMAIN, translation_key="dial_offline", translation_placeholders={"message": message})
+            raise VU1APIError(translation_domain=DOMAIN, translation_key="api_error", translation_placeholders={"message": message})
 
     async def _request(
         self,
         method: str,
         endpoint: str,
         params: dict[str, Any] | None = None,
-        data: aiohttp.FormData | None = None,
-    ) -> dict[str, Any]:
-        """Make an API request."""
-        url = f"{self.base_url}/{endpoint}"
-        params = self._auth_params(params)
-
+        form: aiohttp.FormData | None = None,
+        binary: bool = False,
+    ) -> Any:
+        """Make an API request, returning the JSON envelope (or bytes if ``binary``)."""
         try:
-            endpoint_name = endpoint.split('/')[-1] if '/' in endpoint else endpoint
-            _LOGGER.debug("Making API request to %s", endpoint_name)
-            async with self.session.request(
+            async with self._session.request(
                 method,
-                url,
-                params=params,
-                data=data,
+                f"{self.base_url}/{endpoint}",
+                params=self._auth_params(params),
+                data=form,
                 timeout=ClientTimeout(total=self.timeout),
             ) as response:
-                _LOGGER.debug("Response status: %s", response.status)
+                if binary and response.ok:
+                    return await response.read()
+                try:
+                    payload = await response.json(content_type=None)
+                except ValueError:
+                    payload = None
+                if not response.ok:
+                    message = payload.get("message") if isinstance(payload, dict) else None
+                    raise self._status_error(response.status, message or response.reason)
+        except (ClientError, TimeoutError) as err:
+            raise VU1APIError(translation_domain=DOMAIN, translation_key="cannot_connect", translation_placeholders={"error": str(err)}) from err
 
-                # Log error response body for debugging
-                if response.status >= 400:
-                    try:
-                        error_body = await response.text()
-                        _LOGGER.debug("Error response: %s", error_body[:200] + "..." if len(error_body) > 200 else error_body)
-                    except Exception:
-                        _LOGGER.debug("Could not read error response body")
-
-                response.raise_for_status()
-
-                if response.content_type == "application/json":
-                    data = await response.json()
-
-                    # Check VU1 API status field (raises on offline/error payloads)
-                    self._check_json_status(data)
-
-                    return data
-                else:
-                    # Handle binary responses (like images)
-                    return {"data": await response.read()}
-                    
-        except aiohttp.ClientResponseError as err:
-            self._raise_for_status(err)
-        except (ClientError, asyncio.TimeoutError) as err:
-            raise VU1ConnectionError(f"Connection error: {err}") from err
+        if not isinstance(payload, dict):
+            raise VU1APIError(translation_domain=DOMAIN, translation_key="not_vu1_server", translation_placeholders={"url": self.base_url})
+        self._check_json_status(payload)
+        return payload
 
     @staticmethod
-    def _raise_for_status(err: aiohttp.ClientResponseError) -> None:
-        """Convert aiohttp response errors to VU1 exception hierarchy."""
-        if err.status in (401, 403):
-            raise VU1AuthError(f"Authentication failed: {err.message}") from err
-        if err.status in (503, 406):
-            raise VU1DialOfflineError(f"Dial offline or unavailable: {err.message}") from err
-        raise VU1APIError(f"HTTP error {err.status}: {err.message}") from err
-
-    async def test_connection(self) -> dict[str, Any]:
-        """Test connection and API key, returning detailed status.
-
-        Return contract (always a dict with these four keys):
-          - ``connected``: ``False`` only on a network-level failure
-            (``VU1ConnectionError`` — timeout, refused, DNS, etc.); ``True``
-            whenever the server returned any HTTP response.
-          - ``authenticated``: ``False`` only when the server rejected the API
-            key (``VU1AuthError`` — HTTP 401/403). A generic ``VU1APIError``
-            (HTTP 500 or a 200 + status:"fail" body) keeps ``authenticated``
-            ``True`` and reports the problem via ``error`` — it is a server-side
-            problem, not a bad key, so callers must not treat it as invalid auth.
-          - ``dials``: the dial list on full success, otherwise ``[]``.
-          - ``error``: ``None`` on full success, otherwise ``str(err)``.
-
-        Callers map ``connected=False`` -> CannotConnect and
-        ``authenticated=False`` -> InvalidAuth.
-        """
-        _LOGGER.debug("Testing connection to VU1 server at %s", self.base_url)
-        try:
-            # Use dial list endpoint which requires valid auth to test both connectivity and API key
-            response = await self._request("GET", f"api/{API_VERSION}/dial/list")
-            _LOGGER.debug("Connection and authentication successful.")
-            return {
-                "connected": True,
-                "authenticated": True,
-                "dials": response.get("data", []),
-                "error": None,
-            }
-        except VU1ConnectionError as err:
-            # Network-level connection failure (timeout, refused, etc.)
-            _LOGGER.error("Connection to VU1 server failed: %s", err)
-            return {
-                "connected": False,
-                "authenticated": False,
-                "dials": [],
-                "error": str(err),
-            }
-        except VU1AuthError as err:
-            # Server responded but API key is invalid (401/403)
-            _LOGGER.error("API key validation failed during connection test: %s", err)
-            return {
-                "connected": True,
-                "authenticated": False,
-                "dials": [],
-                "error": str(err),
-            }
-        except VU1APIError as err:
-            # Server responded but returned a non-auth error (HTTP 500 or a
-            # 200 + status:"fail" body). This is a server-side fault, not a bad
-            # API key, so keep authenticated=True and surface it via "error".
-            _LOGGER.error("API error during connection test: %s", err)
-            return {
-                "connected": True,
-                "authenticated": True,
-                "dials": [],
-                "error": str(err),
-            }
+    def _status_error(status: int, message: str | None) -> VU1APIError:
+        """Convert an HTTP error status to the VU1 exception hierarchy."""
+        if status in (401, 403):
+            return VU1AuthError(translation_domain=DOMAIN, translation_key="invalid_auth", translation_placeholders={"message": str(message)})
+        if status in (503, 406):
+            return VU1APIError(translation_domain=DOMAIN, translation_key="dial_offline", translation_placeholders={"message": str(message)})
+        return VU1APIError(translation_domain=DOMAIN, translation_key="api_error", translation_placeholders={"message": f"HTTP {status} {message}"})
 
     async def get_dial_list(self) -> list[dict[str, Any]]:
         """Get list of available dials."""
@@ -238,17 +139,15 @@ class VU1APIClient:
 
     async def set_dial_value(self, dial_uid: str, value: int) -> None:
         """Set dial value (0-100)."""
-        self._validate_dial_uid(dial_uid)
         if not 0 <= value <= 100:
             raise ValueError("Value must be between 0 and 100")
-        
+
         await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/set", {"value": value})
 
     async def set_dial_backlight(
-        self, dial_uid: str, red: int, green: int, blue: int, white: int = 0
+        self, dial_uid: str, red: int, green: int, blue: int, white: int
     ) -> None:
         """Set dial backlight RGBW values (0-100 each)."""
-        self._validate_dial_uid(dial_uid)
         for color, val in [("red", red), ("green", green), ("blue", blue), ("white", white)]:
             if not 0 <= val <= 100:
                 raise ValueError(f"{color} value must be between 0 and 100")
@@ -261,7 +160,6 @@ class VU1APIClient:
 
     async def get_dial_status(self, dial_uid: str) -> dict[str, Any]:
         """Get dial status."""
-        self._validate_dial_uid(dial_uid)
         response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/status")
         return response.get("data", {})
 
@@ -270,151 +168,91 @@ class VU1APIClient:
 
         Server requires 3-30 characters, only [a-z0-9\\-_ ] allowed.
         """
-        self._validate_dial_uid(dial_uid)
-        if not name or not isinstance(name, str):
-            raise VU1InvalidNameError("name must be a non-empty string")
-        if not 3 <= len(name) <= 30:
-            raise VU1InvalidNameError(f"name must be 3-30 characters, got {len(name)}")
-        if not re.match(r'^[a-z0-9\-_ ]+$', name, re.IGNORECASE):
-            raise VU1InvalidNameError("name may only contain letters, digits, hyphens, underscores, and spaces")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9\-_ ]{3,30}", name, re.IGNORECASE):
+            raise VU1InvalidNameError(translation_domain=DOMAIN, translation_key="invalid_dial_name")
         await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/name", {"name": name})
 
     async def get_dial_image(self, dial_uid: str) -> bytes:
         """Get dial background image."""
-        self._validate_dial_uid(dial_uid)
-        response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/image/get")
-        return response.get("data", b"")
+        return await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/image/get", binary=True)
 
     async def get_dial_image_crc(self, dial_uid: str) -> str | None:
         """Get the CRC32 of the dial's current background image."""
-        self._validate_dial_uid(dial_uid)
         response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/image/crc")
         return response.get("data")
 
-    async def set_dial_image(self, dial_uid: str, image_data: bytes, content_type: str = "image/png") -> None:
-        """Set dial background image via multipart form upload."""
-        self._validate_dial_uid(dial_uid)
-        if not image_data:
-            raise ValueError("image_data cannot be empty")
+    async def set_dial_image(self, dial_uid: str, image_data: bytes) -> None:
+        """Set dial background image (PNG or JPEG, at most 2 MB) via multipart upload."""
+        if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+            subtype = "png"
+        elif image_data.startswith(b"\xff\xd8\xff"):
+            subtype = "jpeg"
+        else:
+            raise VU1InvalidImageError(translation_domain=DOMAIN, translation_key="invalid_image")
+        if len(image_data) > MAX_IMAGE_BYTES:
+            raise VU1InvalidImageError(translation_domain=DOMAIN, translation_key="invalid_image")
 
-        form_data = aiohttp.FormData()
-        form_data.add_field('imgfile', image_data, filename='background.png', content_type=content_type)
+        form = aiohttp.FormData()
+        form.add_field("imgfile", image_data, filename=f"background.{subtype}", content_type=f"image/{subtype}")
 
         _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(image_data))
-        await self._request("POST", f"api/{API_VERSION}/dial/{dial_uid}/image/set", data=form_data)
+        await self._request("POST", f"api/{API_VERSION}/dial/{dial_uid}/image/set", form=form)
 
     async def reload_dial(self, dial_uid: str) -> None:
-        """Reload dial configuration."""
-        self._validate_dial_uid(dial_uid)
-        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/reload")
-
-    async def calibrate_dial(self, dial_uid: str, value: int = 1024) -> None:
-        """Calibrate dial to specific value."""
-        self._validate_dial_uid(dial_uid)
-        await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/calibrate", {"value": value})
+        """Reload dial hardware info."""
+        response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/reload")
+        if response.get("data") is False:
+            raise VU1APIError(translation_domain=DOMAIN, translation_key="dial_not_found", translation_placeholders={"dial_uid": dial_uid})
 
     async def set_dial_easing(self, dial_uid: str, period: int, step: int) -> None:
         """Set dial easing configuration."""
-        self._validate_dial_uid(dial_uid)
         await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/easing/dial", {"period": period, "step": step})
 
     async def set_backlight_easing(self, dial_uid: str, period: int, step: int) -> None:
         """Set backlight easing configuration."""
-        self._validate_dial_uid(dial_uid)
         await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/easing/backlight", {"period": period, "step": step})
 
 
-    async def provision_new_dials(self) -> dict[str, Any]:
+    async def provision_new_dials(self) -> None:
         """Provision new dials that have been detected by the server.
 
         Requires the master key (admin privileges). Regular API keys will fail.
         """
         try:
-            response = await self._request("GET", f"api/{API_VERSION}/dial/provision", {"admin_key": self.api_key})
-            return response.get("data") or {}
+            await self._request("GET", f"api/{API_VERSION}/dial/provision", {"admin_key": self.api_key})
         except VU1AuthError as err:
-            raise VU1AuthError(
-                "Provisioning requires the VU1 Server master key. "
-                "The configured API key does not have admin privileges. "
-                "Check your VU1 Server config.yaml for the master_key value "
-                "and reconfigure the integration with it."
-            ) from err
+            raise VU1AuthError(translation_domain=DOMAIN, translation_key="provision_requires_master_key") from err
 
 
-async def discover_vu1_addon() -> dict[str, Any]:
-    """Discover VU1 Server add-on via Home Assistant Supervisor API."""
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        _LOGGER.debug("No SUPERVISOR_TOKEN available, not running in Home Assistant OS")
+async def discover_vu1_addon(session: aiohttp.ClientSession) -> dict[str, Any]:
+    """Discover the VU1 Server add-on via the Supervisor API.
+
+    Returns ``{}`` when not on Supervisor or the add-on is not installed.
+    """
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
         return {}
-    
+
     try:
-        timeout = ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            headers = {"Authorization": f"Bearer {supervisor_token}"}
-            async with session.get("http://supervisor/addons", headers=headers) as response:
-                if response.status != 200:
-                    _LOGGER.warning("Failed to get add-ons list from Supervisor API: HTTP %s", response.status)
-                    return {}
-                
-                data = await response.json()
-                addons = data.get("data", {}).get("addons", [])
-                
-                _LOGGER.debug("Found %d add-ons via Supervisor API", len(addons))
-                
-                # Look for VU1 Server add-on (supports different repository prefixes)
-                for addon in addons:
-                    addon_slug = addon.get("slug", "")
-                    if "vu-server-addon" in addon_slug:
-                        _LOGGER.debug("Found VU1 Server add-on: %s (state: %s)", addon_slug, addon.get("state"))
-                        if addon.get("state") == "started":
-                            slug = addon.get("slug", "vu-server-addon")
-                            
-                            # Get detailed addon info for connection details
-                            async with session.get(f"http://supervisor/addons/{slug}/info", headers=headers) as info_response:
-                                if info_response.status == 200:
-                                    addon_info = await info_response.json()
-                                    addon_data = addon_info.get("data", {})
-
-                                    # Prefer the DNS hostname over ip_address.
-                                    # The hostname (e.g. "local-vu-server-addon") is
-                                    # stable across reboots; the Docker IP can change.
-                                    addon_host = addon_data.get("hostname") or addon_data.get("ip_address")
-
-                                    # Connect directly to the VU1 Server API port.
-                                    # The add-on's ingress proxy is for the web UI
-                                    # panel only — API clients bypass it.
-                                    if addon_host:
-                                        _LOGGER.debug(
-                                            "Found VU1 Server add-on at %s:%s",
-                                            addon_host,
-                                            DEFAULT_PORT,
-                                        )
-                                        return {
-                                            "host": addon_host,
-                                            "port": DEFAULT_PORT,
-                                            "addon_discovered": True,
-                                        }
-
-                                    # Info call succeeded but exposed no address;
-                                    # keep scanning in case another slug matches.
-                                    _LOGGER.warning(
-                                        "No hostname or IP found for VU1 Server add-on %s",
-                                        slug,
-                                    )
-                                    continue
-                                else:
-                                    # Info lookup failed for this slug; try the next match.
-                                    _LOGGER.debug("Failed to get detailed add-on info for %s", slug)
-                                    continue
-                        else:
-                            # Matched slug isn't running; another install may be.
-                            _LOGGER.debug("VU1 Server add-on %s found but not running", addon_slug)
-                            continue
-
-                _LOGGER.warning("VU1 Server add-on not found in installed add-ons")
-                return {}
-
-    except (ClientError, asyncio.TimeoutError) as err:
-        _LOGGER.error("Error discovering VU1 Server add-on: %s", err)
+        async with session.get(
+            "http://supervisor/addons",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=ClientTimeout(total=5),
+        ) as response:
+            response.raise_for_status()
+            addons = (await response.json())["data"]["addons"]
+        matches = [addon for addon in addons if "vu-server-addon" in addon["slug"]]
+    except (ClientError, TimeoutError, ValueError, LookupError, TypeError) as err:
+        _LOGGER.debug("Could not list add-ons from Supervisor: %s", err)
         return {}
+
+    if not matches:
+        return {}
+    running = ("started", "startup")
+    addon = next((a for a in matches if a.get("state") in running), matches[0])
+    # Supervisor derives an add-on's DNS hostname from its slug.
+    return {
+        "host": addon["slug"].replace("_", "-"),
+        "port": DEFAULT_PORT,
+        "running": addon.get("state") in running,
+    }

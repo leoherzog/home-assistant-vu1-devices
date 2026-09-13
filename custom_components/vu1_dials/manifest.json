@@ -1,7 +1,6 @@
 {
   "domain": "vu1_dials",
   "name": "Streacom VU1 Dials",
-  "after_dependencies": ["device_automation"],
   "codeowners": ["@leoherzog"],
   "config_flow": true,
   "dependencies": ["file_upload"],
@@ -10,5 +9,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/leoherzog/home-assistant-vu1-devices/issues",
   "requirements": [],
-  "version": "0.0.1"
+  "single_config_entry": true,
+  "version": "1.0.0"
 }

@@ -1,89 +1,60 @@
 """Config flow for VU1 Dials integration."""
+from __future__ import annotations
+
 import logging
 from collections.abc import Mapping
 from typing import Any
 
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.file_upload import process_uploaded_file
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_PORT
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers import selector
-
-from .const import (
-    DOMAIN,
-    CONF_ADDON_MANAGED,
-    CONF_HOST,
-    CONF_PORT,
-    DEFAULT_UPDATE_INTERVAL,
-    DEFAULT_TIMEOUT,
-)
-from .vu1_api import VU1APIClient, DEFAULT_PORT, discover_vu1_addon
-
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import selector
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
+from .device_config import async_get_config_manager
+from .sensor_binding import async_get_binding_manager
+from .vu1_api import (
+    DEFAULT_PORT,
+    DEFAULT_TIMEOUT,
+    VU1APIClient,
+    VU1APIError,
+    VU1AuthError,
+    discover_vu1_addon,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["ConfigFlow", "OptionsFlowHandler"]
 
+API_KEY_SELECTOR = selector.TextSelector(
+    selector.TextSelectorConfig(
+        type=selector.TextSelectorType.PASSWORD, autocomplete="current-password"
+    )
+)
+
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VU1 Dials."""
 
-    VERSION = 3
-
     def __init__(self) -> None:
         """Initialize config flow."""
-        self._discovered_host: str | None = None
-        self._discovered_port: int | None = None
-        self._addon_available: bool = False
+        self._addon: dict[str, Any] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step - show connection type selection."""
-        errors: dict[str, str] = {}
-
-        if user_input is None:
-            # First, check if VU1 Server add-on is available via Supervisor API
-            _LOGGER.info("Checking for VU1 Server add-on...")
-            discovered = await discover_vu1_addon()
-            
-            if discovered and discovered.get("addon_discovered"):
-                self._addon_available = True
-                self._discovered_host = discovered.get("host")
-                self._discovered_port = discovered.get("port", DEFAULT_PORT)
-                
-                _LOGGER.info("VU1 Server add-on found at %s:%s", self._discovered_host, self._discovered_port)
-            else:
-                _LOGGER.info("No VU1 Server add-on found")
-
-            # Build connection type options (add-on first if available)
-            options = [
-                {"value": "manual", "label": "Manual configuration"}
-            ]
-            
-            if self._addon_available:
-                options.insert(0, {"value": "addon", "label": "VU1 Server Add-on"})
-            
-            schema = vol.Schema({
-                vol.Required("connection_type"): selector.SelectSelector(
-                    selector.SelectSelectorConfig(options=options)
-                )
-            })
-            
-            return self.async_show_form(
-                step_id="user",
-                data_schema=schema,
-                errors=errors,
-            )
-
-        if user_input.get("connection_type") == "addon":
-            return await self.async_step_addon()
-        else:
+        """Offer the VU1 Server add-on when installed, else go to manual setup."""
+        self._addon = await discover_vu1_addon(async_get_clientsession(self.hass))
+        if not self._addon:
             return await self.async_step_manual()
+        return self.async_show_menu(step_id="user", menu_options=["addon", "manual"])
 
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
@@ -92,28 +63,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Prevent duplicate configurations of the same server. Identity is
-            # keyed on entry_id (not host:port), so match on the connection data.
-            self._async_abort_entries_match(
-                {CONF_HOST: user_input["host"], CONF_PORT: user_input["port"]}
-            )
-
-            try:
-                info = await validate_input(self.hass, user_input)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
-            else:
-                return self.async_create_entry(title=info["title"], data=user_input)
+            errors = await validate_input(self.hass, user_input)
+            if not errors:
+                return self.async_create_entry(
+                    title=f"VU1 Server ({user_input[CONF_HOST]}:{user_input[CONF_PORT]})",
+                    data=user_input,
+                )
 
         schema = vol.Schema({
-            vol.Required("host", default="localhost"): cv.string,
-            vol.Required("port", default=DEFAULT_PORT): cv.port,
-            vol.Required("api_key"): cv.string,
+            vol.Required(CONF_HOST, default="localhost"): cv.string,
+            vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
+            vol.Required(CONF_API_KEY): API_KEY_SELECTOR,
         })
 
         return self.async_show_form(
@@ -126,41 +86,24 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle add-on configuration."""
+        if not self._addon["running"]:
+            return self.async_abort(reason="addon_not_running")
+
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Build configuration using discovered add-on details
-            full_input = {
-                "host": self._discovered_host,
-                "port": self._discovered_port,
-                "api_key": user_input["api_key"],
-                CONF_ADDON_MANAGED: True,
+            data = {
+                CONF_HOST: self._addon["host"],
+                CONF_PORT: self._addon["port"],
+                CONF_API_KEY: user_input[CONF_API_KEY],
             }
-
-            # Only one add-on-managed entry makes sense regardless of the
-            # add-on's current (DNS-derived) host.
-            self._async_abort_entries_match({CONF_ADDON_MANAGED: True})
-
-            try:
-                info = await validate_input(self.hass, full_input)
-                info["title"] = "VU1 Server (Add-on)"
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
-            else:
-                return self.async_create_entry(title=info["title"], data=full_input)
-
-        schema = vol.Schema({
-            vol.Required("api_key"): cv.string,
-        })
+            errors = await validate_input(self.hass, data)
+            if not errors:
+                return self.async_create_entry(title="VU1 Server (Add-on)", data=data)
 
         return self.async_show_form(
             step_id="addon",
-            data_schema=schema,
+            data_schema=vol.Schema({vol.Required(CONF_API_KEY): API_KEY_SELECTOR}),
             errors=errors,
         )
 
@@ -170,46 +113,22 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle reconfiguration of the integration."""
         errors: dict[str, str] = {}
         entry = self._get_reconfigure_entry()
-
-        # Re-discover add-on IP if this is an addon-managed entry
-        default_host = entry.data.get("host", "localhost")
-        default_port = entry.data.get("port", DEFAULT_PORT)
-        if entry.data.get(CONF_ADDON_MANAGED):
-            discovered = await discover_vu1_addon()
-            if discovered and discovered.get("addon_discovered"):
-                default_host = discovered["host"]
-                default_port = discovered.get("port", DEFAULT_PORT)
+        host, port = entry.data[CONF_HOST], entry.data[CONF_PORT]
 
         if user_input is not None:
-            # All reconfigure fields are vol.Required, so user_input always
-            # carries host/port/api_key; merge straight over the existing data.
-            updated_data = {**entry.data, **user_input}
-
-            # Prevent reconfiguring onto another entry's server. The current
-            # entry is auto-excluded during SOURCE_RECONFIGURE.
-            self._async_abort_entries_match(
-                {CONF_HOST: updated_data["host"], CONF_PORT: updated_data["port"]}
-            )
-
-            try:
-                await validate_input(self.hass, updated_data)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception during reconfigure")
-                errors["base"] = "unknown"
-            else:
+            updated_data = {**entry.data, **{k: v for k, v in user_input.items() if v}}
+            errors = await validate_input(self.hass, updated_data)
+            if not errors:
                 return self.async_update_reload_and_abort(
                     entry,
                     data_updates=updated_data,
                 )
+            host, port = user_input[CONF_HOST], user_input[CONF_PORT]
 
         schema = vol.Schema({
-            vol.Required("host", default=default_host): cv.string,
-            vol.Required("port", default=default_port): cv.port,
-            vol.Required("api_key", default=entry.data.get("api_key", "")): cv.string,
+            vol.Required(CONF_HOST, default=host): cv.string,
+            vol.Required(CONF_PORT, default=port): cv.port,
+            vol.Optional(CONF_API_KEY): API_KEY_SELECTOR,
         })
 
         return self.async_show_form(
@@ -232,25 +151,16 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
 
         if user_input is not None:
-            updated_data = {**entry.data, "api_key": user_input["api_key"]}
-            try:
-                await validate_input(self.hass, updated_data)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception during reauth")
-                errors["base"] = "unknown"
-            else:
+            errors = await validate_input(self.hass, {**entry.data, **user_input})
+            if not errors:
                 return self.async_update_reload_and_abort(
                     entry,
-                    data_updates={"api_key": user_input["api_key"]},
+                    data_updates={CONF_API_KEY: user_input[CONF_API_KEY]},
                 )
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required("api_key"): cv.string}),
+            data_schema=vol.Schema({vol.Required(CONF_API_KEY): API_KEY_SELECTOR}),
             errors=errors,
         )
 
@@ -275,16 +185,12 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
         """Initialize options flow."""
         self._dials: list[dict[str, str]] = []
         self._selected_dial: str | None = None
-        self._dial_config_data: dict[str, Any] = {}
-        # Store options collected during the flow to preserve update_interval/timeout
         self._collected_options: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage the options."""
-        errors: dict[str, str] = {}
-        
         try:
             coordinator = self.config_entry.runtime_data.coordinator
             if coordinator.data:
@@ -293,7 +199,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._dials = []
                 for dial_uid, dial_data in dials_data.items():
                     # Prefer device registry name (respects name_by_user) over server name
-                    device = device_registry.async_get_device(identifiers={(DOMAIN, dial_uid)})
+                    device = device_registry.async_get_device_by_identifier((DOMAIN, dial_uid), self.config_entry.entry_id)
                     if device:
                         dial_name = device.name_by_user or device.name or dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
                     else:
@@ -302,24 +208,18 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
                         "value": dial_uid,
                         "label": f"{dial_name} ({dial_uid})",
                     })
-        except Exception as err:
+        except AttributeError as err:
             _LOGGER.warning("Could not get dial list for options: %s", err)
             self._dials = []
 
         if user_input is not None:
-            # Preserve update_interval/timeout in collected options for later
-            if "update_interval" in user_input:
-                self._collected_options["update_interval"] = user_input["update_interval"]
-            if "timeout" in user_input:
-                self._collected_options["timeout"] = user_input["timeout"]
+            self._collected_options = {k: user_input[k] for k in ("update_interval", "timeout")}
 
-            if "configure_dial" in user_input and user_input["configure_dial"]:
+            if user_input.get("configure_dial"):
                 self._selected_dial = user_input["configure_dial"]
                 return await self.async_step_configure_dial()
 
-            # Merge collected options with user input for final entry
-            final_options = {**self.config_entry.options, **self._collected_options, **user_input}
-            return self.async_create_entry(title="", data=final_options)
+            return self._async_finish()
 
         schema_dict = {
             vol.Optional(
@@ -333,7 +233,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 default=self.config_entry.options.get("timeout", DEFAULT_TIMEOUT),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
         }
-        
+
         if self._dials:
             schema_dict[vol.Optional("configure_dial")] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=self._dials)
@@ -342,85 +242,51 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema_dict),
-            errors=errors,
         )
+
+    @callback
+    def _async_finish(self) -> ConfigFlowResult:
+        """Save the existing options merged with those collected in this flow."""
+        return self.async_create_entry(
+            data={**self.config_entry.options, **self._collected_options}
+        )
+
+    def _dial_placeholders(self) -> dict[str, str]:
+        """Return the selected dial's name for step descriptions."""
+        dial = self.config_entry.runtime_data.coordinator.data["dials"].get(
+            self._selected_dial, {}
+        )
+        return {"dial_name": dial.get("dial_name", self._selected_dial)}
 
     async def async_step_configure_dial(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Configure specific dial - choose what to configure."""
-        if not self._selected_dial:
-            return await self.async_step_init()
-
-        if user_input is not None:
-            action = user_input["dial_action"]
-            if action == "update_mode":
-                return await self.async_step_configure_update_mode()
-            elif action == "upload_image":
-                return await self.async_step_upload_image()
-
-        coordinator = self.config_entry.runtime_data.coordinator
-        dials_data = coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._selected_dial, {})
-        dial_name = dial_data.get("dial_name", self._selected_dial)
-
-        schema = vol.Schema({
-            vol.Required("dial_action"): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": "update_mode", "label": "Configure update mode"},
-                        {"value": "upload_image", "label": "Upload background image"},
-                    ]
-                )
-            ),
-        })
-
-        return self.async_show_form(
+        return self.async_show_menu(
             step_id="configure_dial",
-            data_schema=schema,
-            description_placeholders={
-                "dial_name": dial_name,
-            },
+            menu_options=["configure_update_mode", "upload_image"],
+            description_placeholders=self._dial_placeholders(),
         )
 
     async def async_step_configure_update_mode(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Choose update mode for the dial."""
-        errors: dict[str, str] = {}
-
-        if not self._selected_dial:
-            return await self.async_step_init()
-
-        try:
-            from .device_config import async_get_config_manager
-            config_manager = async_get_config_manager(self.hass)
-            current_config = config_manager.get_dial_config(self._selected_dial)
-        except Exception as err:
-            _LOGGER.error("Failed to get device config manager: %s", err)
-            return self.async_abort(reason="config_error")
-
         if user_input is not None:
             if user_input["update_mode"] == "automatic":
                 return await self.async_step_configure_automatic()
-            else:
-                return await self.async_step_configure_manual()
+            return await self.async_step_configure_manual()
 
-        coordinator = self.config_entry.runtime_data.coordinator
-        dials_data = coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._selected_dial, {})
-        dial_name = dial_data.get("dial_name", self._selected_dial)
-
+        current_config = async_get_config_manager(self.hass).get_dial_config(
+            self._selected_dial
+        )
         schema = vol.Schema({
             vol.Required(
                 "update_mode",
                 default=current_config.get("update_mode", "manual")
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
-                    options=[
-                        {"value": "automatic", "label": "Automatic (sensor-driven)"},
-                        {"value": "manual", "label": "Manual only"}
-                    ]
+                    options=["automatic", "manual"], translation_key="update_mode"
                 )
             ),
         })
@@ -428,10 +294,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="configure_update_mode",
             data_schema=schema,
-            errors=errors,
-            description_placeholders={
-                "dial_name": dial_name,
-            },
+            description_placeholders=self._dial_placeholders(),
         )
 
     async def async_step_upload_image(
@@ -440,53 +303,37 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
         """Upload a background image for the dial."""
         errors: dict[str, str] = {}
 
-        if not self._selected_dial:
-            return await self.async_step_init()
-
         if user_input is not None:
-            uploaded_file_id = user_input.get("background_image")
-            if uploaded_file_id:
-                try:
-                    from homeassistant.components.file_upload import process_uploaded_file
-                    import mimetypes
 
-                    with process_uploaded_file(self.hass, uploaded_file_id) as file_path:
-                        image_data = await self.hass.async_add_executor_job(file_path.read_bytes)
-                        content_type = mimetypes.guess_type(str(file_path))[0] or "image/png"
+            def _read_upload(file_id: str) -> bytes:
+                with process_uploaded_file(self.hass, file_id) as file_path:
+                    return file_path.read_bytes()
 
-                    client = self.config_entry.runtime_data.client
-                    await client.set_dial_image(self._selected_dial, image_data, content_type)
-
-                    coordinator = self.config_entry.runtime_data.coordinator
-                    await coordinator.async_request_refresh()
-                except Exception as err:
-                    _LOGGER.error("Failed to upload image for dial %s: %s", self._selected_dial, err)
-                    errors["base"] = "image_upload_failed"
-
-            if not errors:
-                final_options = {**self.config_entry.options, **self._collected_options}
-                return self.async_create_entry(title="", data=final_options)
-
-        from homeassistant.helpers.selector import FileSelector, FileSelectorConfig
+            try:
+                image_data = await self.hass.async_add_executor_job(
+                    _read_upload, user_input["background_image"]
+                )
+                await self.config_entry.runtime_data.client.set_dial_image(
+                    self._selected_dial, image_data
+                )
+            except (HomeAssistantError, OSError, ValueError) as err:
+                _LOGGER.error("Failed to upload image for dial %s: %s", self._selected_dial, err)
+                errors["base"] = "image_upload_failed"
+            else:
+                await self.config_entry.runtime_data.coordinator.async_request_refresh()
+                return self._async_finish()
 
         schema = vol.Schema({
-            vol.Required("background_image"): FileSelector(
-                FileSelectorConfig(accept="image/png,image/jpeg,.png,.jpg,.jpeg")
+            vol.Required("background_image"): selector.FileSelector(
+                selector.FileSelectorConfig(accept="image/png,image/jpeg,.png,.jpg,.jpeg")
             ),
         })
-
-        coordinator = self.config_entry.runtime_data.coordinator
-        dials_data = coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._selected_dial, {})
-        dial_name = dial_data.get("dial_name", self._selected_dial)
 
         return self.async_show_form(
             step_id="upload_image",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "dial_name": dial_name,
-            },
+            description_placeholders=self._dial_placeholders(),
         )
 
     async def async_step_configure_automatic(
@@ -494,17 +341,8 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
     ) -> ConfigFlowResult:
         """Configure automatic mode with sensor binding."""
         errors: dict[str, str] = {}
-        
-        if not self._selected_dial:
-            return await self.async_step_init()
-        
-        try:
-            from .device_config import async_get_config_manager
-            config_manager = async_get_config_manager(self.hass)
-            current_config = config_manager.get_dial_config(self._selected_dial)
-        except Exception as err:
-            _LOGGER.error("Failed to get device config manager: %s", err)
-            return self.async_abort(reason="config_error")
+        config_manager = async_get_config_manager(self.hass)
+        current_config = config_manager.get_dial_config(self._selected_dial)
 
         if user_input is not None:
             value_min = user_input.get("value_min", 0)
@@ -512,33 +350,19 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
             if value_min >= value_max:
                 errors["base"] = "value_min_greater_than_max"
             else:
-                try:
-                    processed_config = {
+                await config_manager.async_update_dial_config(
+                    self._selected_dial,
+                    {
                         "update_mode": "automatic",
                         "bound_entity": user_input.get("bound_entity") or None,
                         "value_min": value_min,
                         "value_max": value_max,
-                    }
-                    
-                    await config_manager.async_update_dial_config(self._selected_dial, processed_config)
-                    
-                    from .sensor_binding import async_get_binding_manager
-                    binding_manager = async_get_binding_manager(self.hass)
-                    if binding_manager:
-                        await binding_manager.async_reconfigure_dial_binding(self._selected_dial)
-
-                    # Merge collected options (including update_interval) with existing options
-                    final_options = {**self.config_entry.options, **self._collected_options}
-                    return self.async_create_entry(title="", data=final_options)
-
-                except Exception as err:
-                    _LOGGER.error("Failed to update dial configuration: %s", err)
-                    errors["base"] = "config_update_failed"
-
-        coordinator = self.config_entry.runtime_data.coordinator
-        dials_data = coordinator.data.get("dials", {})
-        dial_data = dials_data.get(self._selected_dial, {})
-        dial_name = dial_data.get("dial_name", self._selected_dial)
+                    },
+                )
+                await async_get_binding_manager(
+                    self.hass
+                ).async_reconfigure_dial_binding(self._selected_dial)
+                return self._async_finish()
 
         entity_selector_config = selector.EntitySelectorConfig(
             domain=["sensor", "input_number", "number", "counter"],
@@ -547,15 +371,15 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         schema = vol.Schema({
             vol.Required(
-                "bound_entity", 
+                "bound_entity",
                 default=current_config.get("bound_entity")
             ): selector.EntitySelector(entity_selector_config),
             vol.Optional(
-                "value_min", 
+                "value_min",
                 default=current_config.get("value_min", 0)
             ): vol.Coerce(float),
             vol.Optional(
-                "value_max", 
+                "value_max",
                 default=current_config.get("value_max", 100)
             ): vol.Coerce(float),
         })
@@ -564,85 +388,37 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
             step_id="configure_automatic",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "dial_name": dial_name,
-            },
+            description_placeholders=self._dial_placeholders(),
         )
 
     async def async_step_configure_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Configure manual mode (just saves the mode)."""
-        if not self._selected_dial:
-            return await self.async_step_init()
-            
-        try:
-            from .device_config import async_get_config_manager
-            config_manager = async_get_config_manager(self.hass)
-            
-            processed_config = {
-                "update_mode": "manual",
-                "bound_entity": None,
-                "value_min": 0,
-                "value_max": 100,
-            }
-            
-            await config_manager.async_update_dial_config(self._selected_dial, processed_config)
-            
-            from .sensor_binding import async_get_binding_manager
-            binding_manager = async_get_binding_manager(self.hass)
-            if binding_manager:
-                await binding_manager.async_reconfigure_dial_binding(self._selected_dial)
-
-            # Merge collected options (including update_interval) with existing options
-            final_options = {**self.config_entry.options, **self._collected_options}
-            return self.async_create_entry(title="", data=final_options)
-
-        except Exception as err:
-            _LOGGER.error("Failed to update dial configuration: %s", err)
-            return self.async_abort(reason="config_update_failed")
+        await async_get_config_manager(self.hass).async_update_dial_config(
+            self._selected_dial, {"update_mode": "manual"}
+        )
+        await async_get_binding_manager(self.hass).async_reconfigure_dial_binding(
+            self._selected_dial
+        )
+        return self._async_finish()
 
 
-class CannotConnect(HomeAssistantError):
-    """Error to indicate we cannot connect."""
-
-
-class InvalidAuth(HomeAssistantError):
-    """Error to indicate there is invalid auth."""
-
-
-async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect.
-
-    Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
-    """
+async def validate_input(hass: HomeAssistant, data: Mapping[str, Any]) -> dict[str, str]:
+    """Return form errors for the connection details, empty when they work."""
     client = VU1APIClient(
-        host=data["host"],
-        port=data["port"],
-        api_key=data["api_key"],
+        host=data[CONF_HOST],
+        port=data[CONF_PORT],
+        api_key=data[CONF_API_KEY],
         session=async_get_clientsession(hass),
     )
-    connection_info = f"{data['host']}:{data['port']}"
-
-    _LOGGER.debug("Testing connection to VU1 server at %s", connection_info)
-
-    connection_result = await client.test_connection()
-    if not connection_result["connected"]:
-        _LOGGER.error("Connection failed: %s", connection_result.get("error", "Unknown error"))
-        raise CannotConnect(f"Cannot connect to VU1 server: {connection_result.get('error', 'Unknown error')}")
-
-    if not connection_result["authenticated"]:
-        _LOGGER.error("API key validation failed: %s", connection_result.get("error", "Unknown error"))
-        raise InvalidAuth(f"Invalid API Key: {connection_result.get('error', 'Unknown error')}")
-
-    if connection_result["error"] is not None:
-        _LOGGER.error("Server-side error during validation: %s", connection_result["error"])
-        raise CannotConnect(f"Cannot connect to VU1 server: {connection_result['error']}")
-
-    dials = connection_result.get("dials", [])
-    _LOGGER.debug("Successfully connected to VU1 server, found %d dials", len(dials))
-
-    return {
-        "title": f"VU1 Server ({connection_info})",
-        "dial_count": len(dials),
-    }
+    try:
+        await client.get_dial_list()
+    except VU1AuthError:
+        return {"base": "invalid_auth"}
+    except VU1APIError:
+        return {"base": "cannot_connect"}
+    except Exception:  # pylint: disable=broad-except
+        _LOGGER.exception("Unexpected exception")
+        return {"base": "unknown"}
+    return {}

@@ -1,23 +1,24 @@
 """Device configuration support for VU1 dials."""
-import asyncio
+from __future__ import annotations
+
 import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from .const import (
-    DOMAIN,
-    CONF_BOUND_ENTITY,
-    CONF_VALUE_MIN,
-    CONF_VALUE_MAX,
     CONF_BACKLIGHT_COLOR,
+    CONF_BOUND_ENTITY,
     CONF_UPDATE_MODE,
-    DEFAULT_VALUE_MIN,
-    DEFAULT_VALUE_MAX,
+    CONF_VALUE_MAX,
+    CONF_VALUE_MIN,
+    DATA_CONFIG_MANAGER,
     DEFAULT_BACKLIGHT_COLOR,
     DEFAULT_UPDATE_MODE,
+    DEFAULT_VALUE_MAX,
+    DEFAULT_VALUE_MIN,
+    DOMAIN,
     UPDATE_MODE_AUTOMATIC,
     UPDATE_MODE_MANUAL,
 )
@@ -28,6 +29,7 @@ __all__ = ["VU1DialConfigManager", "async_get_config_manager"]
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}_dial_configs"
+SAVE_DELAY = 10
 
 
 class VU1DialConfigManager:
@@ -36,56 +38,41 @@ class VU1DialConfigManager:
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the config manager."""
         self.hass = hass
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store: Store[dict[str, Any]] = Store(
+            hass, STORAGE_VERSION, STORAGE_KEY, atomic_writes=True
+        )
         # In-memory cache of dial configurations: dial_uid -> config_dict
         self._configs: dict[str, dict[str, Any]] = {}
         # Event listeners for config changes: dial_uid -> [listener_functions]
         self._listeners: dict[str, list] = {}
-        # Protect read-merge-write from concurrent updates
-        self._update_lock = asyncio.Lock()
 
     async def async_load(self) -> None:
         """Load configurations from storage."""
-        data = await self._store.async_load()
-        if data:
-            stored = data.get("dial_configs", {})
-            # Validate/sanitize each stored config so malformed persisted data
-            # can't propagate. Skip the bound-entity existence check here: the
-            # entity/state registries may not be fully populated this early in
-            # startup, and we don't want to silently drop valid bindings.
+        if data := await self._store.async_load():
             self._configs = {
-                dial_uid: self._validate_config(config, validate_entity=False)
-                for dial_uid, config in stored.items()
+                dial_uid: self._validate_config(config)
+                for dial_uid, config in data.get("dial_configs", {}).items()
             }
 
-    async def async_save(self) -> None:
-        """Save configurations to storage."""
-        await self._store.async_save({"dial_configs": self._configs})
+    @callback
+    def _async_schedule_save(self) -> None:
+        """Coalesce writes to storage."""
+        self._store.async_delay_save(lambda: {"dial_configs": self._configs}, SAVE_DELAY)
 
     def get_dial_config(self, dial_uid: str) -> dict[str, Any]:
-        """Get configuration for a dial."""
-        return self._configs.get(dial_uid, self._get_default_config())
+        """Get a copy of the configuration for a dial."""
+        config = self._configs.get(dial_uid) or self._get_default_config()
+        return {**config, CONF_BACKLIGHT_COLOR: list(config[CONF_BACKLIGHT_COLOR])}
 
     async def async_update_dial_config(
         self, dial_uid: str, config: dict[str, Any]
     ) -> None:
-        """Update configuration for a dial."""
-        async with self._update_lock:
-            # Get the existing configuration (includes defaults)
-            existing_config = self.get_dial_config(dial_uid)
-
-            # Merge new settings with existing config
-            merged_config = {**existing_config, **config}
-
-            # Validate and sanitize the merged configuration
-            validated_config = self._validate_config(merged_config)
-
-            # Store in memory cache and persist to disk
-            self._configs[dial_uid] = validated_config
-            await self.async_save()
-
-        # Notify listeners outside the lock to avoid deadlocks
-        await self._notify_listeners(dial_uid, validated_config)
+        """Merge and persist configuration for a dial."""
+        self._configs[dial_uid] = self._validate_config(
+            {**self.get_dial_config(dial_uid), **config}
+        )
+        self._async_schedule_save()
+        await self._notify_listeners(dial_uid, self.get_dial_config(dial_uid))
 
     async def async_remove_dial_config(self, dial_uid: str) -> None:
         """Remove stored configuration for a dial.
@@ -94,14 +81,14 @@ class VU1DialConfigManager:
         for use from ``async_remove_config_entry_device`` so a removed dial
         doesn't leave orphaned persisted configuration behind.
         """
-        async with self._update_lock:
-            if dial_uid not in self._configs:
-                return
-            del self._configs[dial_uid]
-            await self.async_save()
-
-        # Drop any listeners registered for the now-removed dial.
+        if self._configs.pop(dial_uid, None) is not None:
+            self._async_schedule_save()
         self._listeners.pop(dial_uid, None)
+
+    async def async_remove(self) -> None:
+        """Discard all stored dial configuration."""
+        self._configs.clear()
+        await self._store.async_remove()
 
     def _get_default_config(self) -> dict[str, Any]:
         """Get default dial configuration."""
@@ -109,7 +96,7 @@ class VU1DialConfigManager:
             CONF_BOUND_ENTITY: None,
             CONF_VALUE_MIN: DEFAULT_VALUE_MIN,
             CONF_VALUE_MAX: DEFAULT_VALUE_MAX,
-            CONF_BACKLIGHT_COLOR: list(DEFAULT_BACKLIGHT_COLOR),  # Convert tuple to list for storage
+            CONF_BACKLIGHT_COLOR: list(DEFAULT_BACKLIGHT_COLOR),
             CONF_UPDATE_MODE: DEFAULT_UPDATE_MODE,
             "dial_easing_period": 50,
             "dial_easing_step": 5,
@@ -117,70 +104,32 @@ class VU1DialConfigManager:
             "backlight_easing_step": 5,
         }
 
-    def _validate_config(
-        self, config: dict[str, Any], *, validate_entity: bool = True
-    ) -> dict[str, Any]:
-        """Validate and sanitize dial configuration.
-
-        When ``validate_entity`` is False the bound-entity existence check is
-        skipped (used during startup load, before the registries are ready).
-        """
-        # Create a copy to operate on, preserving the original
-        validated = config.copy()
-
-        # Fill in any missing keys with defaults
+    def _validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Return a sanitized config holding only known keys."""
         defaults = self._get_default_config()
-        for key, default_value in defaults.items():
-            if key not in validated:
-                validated[key] = default_value
+        validated = {key: config.get(key, default) for key, default in defaults.items()}
 
-        # Validate bound entity exists in entity registry
-        if validate_entity and validated.get(CONF_BOUND_ENTITY) and not self._is_valid_entity(validated[CONF_BOUND_ENTITY]):
-            validated[CONF_BOUND_ENTITY] = None
-        
-        # Validate value_min as float
-        try:
-            validated[CONF_VALUE_MIN] = float(validated[CONF_VALUE_MIN])
-        except (ValueError, TypeError, KeyError):
-            validated[CONF_VALUE_MIN] = defaults[CONF_VALUE_MIN]
+        for key in (CONF_VALUE_MIN, CONF_VALUE_MAX):
+            try:
+                validated[key] = float(validated[key])
+            except (ValueError, TypeError):
+                validated[key] = defaults[key]
 
-        # Validate value_max as float
-        try:
-            validated[CONF_VALUE_MAX] = float(validated[CONF_VALUE_MAX])
-        except (ValueError, TypeError, KeyError):
-            validated[CONF_VALUE_MAX] = defaults[CONF_VALUE_MAX]
-            
         # Ensure min <= max (swap if necessary)
         if validated[CONF_VALUE_MIN] > validated[CONF_VALUE_MAX]:
             validated[CONF_VALUE_MIN], validated[CONF_VALUE_MAX] = validated[CONF_VALUE_MAX], validated[CONF_VALUE_MIN]
-        
-        # Validate backlight_color as RGB values (0-100 each)
-        color = validated.get(CONF_BACKLIGHT_COLOR)
-        if isinstance(color, (list, tuple)) and len(color) == 3:
-            try:
-                # Clamp RGB values to 0-100 range and store as list for JSON compatibility
-                validated[CONF_BACKLIGHT_COLOR] = [max(0, min(100, int(c))) for c in color]
-            except (ValueError, TypeError):
-                validated[CONF_BACKLIGHT_COLOR] = list(defaults[CONF_BACKLIGHT_COLOR])
-        else:
-            validated[CONF_BACKLIGHT_COLOR] = list(defaults[CONF_BACKLIGHT_COLOR])
 
-        # Validate update_mode is one of the allowed values
-        if validated.get(CONF_UPDATE_MODE) not in [UPDATE_MODE_AUTOMATIC, UPDATE_MODE_MANUAL]:
+        # RGBW backlight, 0-100 per channel
+        try:
+            color = [max(0, min(100, int(c))) for c in validated[CONF_BACKLIGHT_COLOR]]
+        except (ValueError, TypeError):
+            color = []
+        validated[CONF_BACKLIGHT_COLOR] = color if len(color) == 4 else defaults[CONF_BACKLIGHT_COLOR]
+
+        if validated[CONF_UPDATE_MODE] not in (UPDATE_MODE_AUTOMATIC, UPDATE_MODE_MANUAL):
             validated[CONF_UPDATE_MODE] = defaults[CONF_UPDATE_MODE]
 
         return validated
-
-    def _is_valid_entity(self, entity_id: str) -> bool:
-        """Check if entity ID is valid and exists."""
-        if not entity_id:
-            return False
-        
-        entity_registry = er.async_get(self.hass)
-        if entity_registry.async_get(entity_id) is not None:
-            return True
-
-        return self.hass.states.get(entity_id) is not None
 
     @callback
     def async_add_listener(self, dial_uid: str, listener) -> None:
@@ -202,18 +151,14 @@ class VU1DialConfigManager:
 
     async def _notify_listeners(self, dial_uid: str, config: dict[str, Any]) -> None:
         """Notify listeners of configuration changes."""
-        if dial_uid in self._listeners:
-            # Iterate over a copy — callbacks may remove themselves during iteration
-            for listener in list(self._listeners.get(dial_uid, [])):
-                try:
-                    await listener(dial_uid, config)
-                except Exception as err:
-                    _LOGGER.exception("Error notifying config listener: %s", err)
+        for listener in list(self._listeners.get(dial_uid, [])):
+            try:
+                await listener(dial_uid, config)
+            except Exception:
+                _LOGGER.exception("Error notifying config listener")
 
 
 @callback
 def async_get_config_manager(hass: HomeAssistant) -> VU1DialConfigManager:
-    """Get the dial configuration manager."""
-    if f"{DOMAIN}_config_manager" not in hass.data:
-        hass.data[f"{DOMAIN}_config_manager"] = VU1DialConfigManager(hass)
-    return hass.data[f"{DOMAIN}_config_manager"]
+    """Return the dial configuration manager loaded in async_setup."""
+    return hass.data[DATA_CONFIG_MANAGER]

@@ -4,24 +4,33 @@
       "user": {
         "title": "Connect to VU1 Server",
         "description": "Select how to connect to your VU1 Server.",
-        "data": {
-          "connection_type": "Connection method"
+        "menu_options": {
+          "addon": "VU1 Server add-on",
+          "manual": "Enter connection details manually"
         }
       },
       "manual": {
         "title": "Manual Configuration",
-        "description": "Enter the connection details for your VU1 Server. Get the API key from the VU1 Server Web UI under Settings → API Keys (create or copy a key). The server's master key, stored in its config.yaml, also works.",
+        "description": "Enter the connection details for your VU1 Server. Use the server's master key (master_key in its config.yaml) for full access. A key created in the VU1 Server Web UI under Settings → API Keys works for everything except provisioning new dials.",
         "data": {
           "host": "Host",
           "port": "Port",
           "api_key": "API Key"
+        },
+        "data_description": {
+          "host": "Hostname or IP address of the machine running VU1 Server.",
+          "port": "VU1 Server HTTP port (default 5340).",
+          "api_key": "The master key or a VU1 Server API key."
         }
       },
       "addon": {
         "title": "VU1 Server Add-on",
-        "description": "Enter the API key for the VU1 Server Add-on. Open the add-on's Web UI (Open Web UI), then go to Settings → API Keys to create or copy a key. The master key is printed once in the add-on log on first start and stored in /data/vu-server/config.yaml; it also works here.",
+        "description": "Enter the master key of the VU1 Server add-on. It is printed in the add-on log on every start (restart the add-on if you missed it). A key created in the add-on Web UI under Settings → API Keys works for everything except provisioning new dials.",
         "data": {
           "api_key": "API Key"
+        },
+        "data_description": {
+          "api_key": "The master key or a VU1 Server API key."
         }
       },
       "reconfigure": {
@@ -31,6 +40,11 @@
           "host": "Host",
           "port": "Port",
           "api_key": "API Key"
+        },
+        "data_description": {
+          "host": "Hostname or IP address of the machine running VU1 Server.",
+          "port": "VU1 Server HTTP port (default 5340).",
+          "api_key": "Leave empty to keep the current key."
         }
       },
       "reauth_confirm": {
@@ -38,23 +52,25 @@
         "description": "Your VU1 Server API key is no longer valid. Enter a new one.",
         "data": {
           "api_key": "API Key"
+        },
+        "data_description": {
+          "api_key": "The master key or a VU1 Server API key."
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to VU1 server",
+      "cannot_connect": "Failed to connect to VU1 Server",
       "invalid_auth": "Invalid API key",
       "unknown": "Unexpected error occurred"
     },
     "abort": {
-      "already_configured": "VU1 server is already configured",
-      "reconfigure_successful": "VU1 Server settings updated successfully",
-      "reauth_successful": "Re-authentication was successful"
+      "addon_not_running": "The VU1 Server add-on is not running. Start it and try again.",
+      "reauth_successful": "Re-authentication was successful",
+      "reconfigure_successful": "VU1 Server settings updated successfully"
     }
   },
   "options": {
     "error": {
-      "config_update_failed": "Failed to update dial configuration",
       "value_min_greater_than_max": "Minimum value must be less than maximum value",
       "image_upload_failed": "Failed to upload image to the dial"
     },
@@ -66,42 +82,63 @@
           "update_interval": "Update interval (seconds)",
           "timeout": "Request timeout (seconds)",
           "configure_dial": "Configure dial"
+        },
+        "data_description": {
+          "update_interval": "How often Home Assistant polls VU1 Server for dial status.",
+          "timeout": "How long to wait for VU1 Server to answer a request.",
+          "configure_dial": "Pick a dial to change its update mode or background image. Leave empty to only save the settings above."
         }
       },
       "configure_dial": {
         "title": "Configure {dial_name}",
         "description": "Choose what to configure for this dial.",
-        "data": {
-          "dial_action": "Action"
+        "menu_options": {
+          "configure_update_mode": "Update mode",
+          "upload_image": "Background image"
         }
       },
       "configure_update_mode": {
         "title": "Update Mode",
-        "description": "Configure update mode for {dial_name}\n\nChoose how this dial should be updated.",
+        "description": "Choose how {dial_name} should be updated.",
         "data": {
           "update_mode": "Update mode"
+        },
+        "data_description": {
+          "update_mode": "Automatic follows a bound sensor. Manual is set from Home Assistant entities and actions."
         }
       },
       "upload_image": {
         "title": "Upload Background Image",
-        "description": "Upload a background image for {dial_name}\n\nUpload a PNG or JPEG image. The VU1 dial display is 144x200 pixels.",
+        "description": "Upload a background image for {dial_name}.",
         "data": {
           "background_image": "Background image"
+        },
+        "data_description": {
+          "background_image": "PNG or JPEG, up to 2 MB. The dial display is 144x200 pixels."
         }
       },
       "configure_automatic": {
         "title": "Automatic Mode",
-        "description": "Configure automatic sensor binding for {dial_name}\n\nSelect a sensor to bind to this dial. The sensor's value will be mapped from the specified range to 0-100% on the dial.",
+        "description": "Bind a sensor to {dial_name}. Its value is mapped from the range below to 0-100% on the dial.",
         "data": {
           "bound_entity": "Bound sensor entity",
           "value_min": "Minimum value",
           "value_max": "Maximum value"
+        },
+        "data_description": {
+          "bound_entity": "The entity whose value drives the needle.",
+          "value_min": "The source value shown as 0% on the dial.",
+          "value_max": "The source value shown as 100% on the dial."
         }
       }
-    },
-    "abort": {
-      "config_update_failed": "Failed to update dial configuration",
-      "config_error": "Failed to load device configuration"
+    }
+  },
+  "selector": {
+    "update_mode": {
+      "options": {
+        "automatic": "Automatic",
+        "manual": "Manual"
+      }
     }
   },
   "entity": {
@@ -126,9 +163,6 @@
       }
     },
     "sensor": {
-      "value": {
-        "name": "Value"
-      },
       "update_mode": {
         "name": "Update mode",
         "state": {
@@ -141,12 +175,6 @@
       },
       "server_name": {
         "name": "Server name"
-      },
-      "firmware_version": {
-        "name": "Firmware version"
-      },
-      "hardware_version": {
-        "name": "Hardware version"
       },
       "protocol_version": {
         "name": "Protocol version"
@@ -166,8 +194,7 @@
         "state": {
           "responsive": "Responsive",
           "balanced": "Balanced",
-          "smooth": "Smooth",
-          "custom": "Custom"
+          "smooth": "Smooth"
         }
       }
     },
@@ -177,9 +204,6 @@
       },
       "refresh_hardware_info": {
         "name": "Refresh hardware info"
-      },
-      "identify": {
-        "name": "Identify"
       }
     },
     "image": {
@@ -196,10 +220,128 @@
       "bound_entity": "Bound sensor entity",
       "value_min": "Minimum value",
       "value_max": "Maximum value",
-      "backlight_color": "Backlight color (RGB, 0-100)",
+      "backlight_color": "Backlight color",
       "dial_easing": "Dial easing preset",
       "backlight_easing": "Backlight easing preset",
       "update_mode": "Update mode"
+    }
+  },
+  "exceptions": {
+    "action_failed": {
+      "message": "Failed to {action} for {failed}/{total} dials: {errors}"
+    },
+    "api_error": {
+      "message": "VU1 Server error: {message}"
+    },
+    "cannot_connect": {
+      "message": "Cannot connect to VU1 Server: {error}"
+    },
+    "cannot_read_media": {
+      "message": "Could not read {path}: {error}"
+    },
+    "dial_not_found": {
+      "message": "Dial {dial_uid} is not available"
+    },
+    "dial_offline": {
+      "message": "Dial is offline or unavailable: {message}"
+    },
+    "invalid_auth": {
+      "message": "VU1 Server rejected the API key: {message}"
+    },
+    "invalid_dial_name": {
+      "message": "VU1 Server dial names must be 3-30 characters using only letters, digits, spaces, `-` and `_`"
+    },
+    "invalid_image": {
+      "message": "The image must be a PNG or JPEG of at most 2 MB"
+    },
+    "no_dials_targeted": {
+      "message": "The action target contains no VU1 dials"
+    },
+    "not_a_dial": {
+      "message": "Device {device_id} is not a VU1 dial"
+    },
+    "not_local_media": {
+      "message": "{media_content_id} is not a local media file"
+    },
+    "not_vu1_server": {
+      "message": "Unexpected response from {url}; this does not look like a VU1 Server"
+    },
+    "provision_requires_master_key": {
+      "message": "Provisioning new dials requires the VU1 Server master key (master_key in its config.yaml). Reconfigure the integration with it"
+    },
+    "single_dial_only": {
+      "message": "Set dial name accepts only one target dial"
+    },
+    "value_min_not_less_than_max": {
+      "message": "Minimum value must be less than maximum value"
+    }
+  },
+  "issues": {
+    "invalid_dial_name": {
+      "title": "Dial name not synced to VU1 Server",
+      "description": "The dial name \"{name}\" was kept in Home Assistant only. {error}."
+    },
+    "no_dials": {
+      "title": "VU1 Server reports no dials",
+      "description": "VU1 Server returned no dials for the configured API key. Grant the key access to dials in the VU1 Server Web UI, or connect a dial and press Provision new dials on the VU1 Server device (requires the master key)."
+    }
+  },
+  "services": {
+    "set_dial_value": {
+      "name": "Set dial value",
+      "description": "Sets the needle position of a VU1 dial (0-100%). A dial bound to a sensor in automatic mode is switched to manual.",
+      "fields": {
+        "value": {
+          "name": "Value",
+          "description": "The dial value to set (0-100%)."
+        }
+      }
+    },
+    "set_dial_backlight": {
+      "name": "Set dial backlight",
+      "description": "Sets the RGBW backlight color of a VU1 dial. The backlight light entity offers a color picker instead.",
+      "fields": {
+        "red": {
+          "name": "Red",
+          "description": "Red channel (0-100%)."
+        },
+        "green": {
+          "name": "Green",
+          "description": "Green channel (0-100%)."
+        },
+        "blue": {
+          "name": "Blue",
+          "description": "Blue channel (0-100%)."
+        },
+        "white": {
+          "name": "White",
+          "description": "White channel (0-100%). Keeps the current white level when omitted."
+        }
+      }
+    },
+    "set_dial_name": {
+      "name": "Set dial name",
+      "description": "Sets the display name of a single VU1 dial. Only one dial can be targeted at a time. The Home Assistant device is renamed too.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "The new display name for the dial."
+        }
+      }
+    },
+    "set_dial_image": {
+      "name": "Set dial background image",
+      "description": "Sets the background image of a VU1 dial from a PNG or JPEG (up to 2 MB, ideally 144x200) in the Home Assistant media library.",
+      "fields": {
+        "media_content_id": {
+          "name": "Media content",
+          "description": "The image from the media library to use as the dial background."
+        }
+      }
+    },
+    "reload_dial": {
+      "name": "Reload dial",
+      "description": "Reloads the hardware configuration and refreshes the information of a VU1 dial."
     }
   }
 }

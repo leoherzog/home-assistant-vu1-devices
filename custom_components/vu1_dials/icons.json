@@ -1,6 +1,9 @@
 {
   "entity": {
     "number": {
+      "dial_value": {
+        "default": "mdi:gauge"
+      },
       "value_min": {
         "default": "mdi:numeric"
       },
@@ -21,9 +24,6 @@
       }
     },
     "sensor": {
-      "value": {
-        "default": "mdi:gauge"
-      },
       "update_mode": {
         "default": "mdi:update"
       },
@@ -32,12 +32,6 @@
       },
       "server_name": {
         "default": "mdi:rename"
-      },
-      "firmware_version": {
-        "default": "mdi:chip"
-      },
-      "hardware_version": {
-        "default": "mdi:developer-board"
       },
       "protocol_version": {
         "default": "mdi:api"
@@ -62,15 +56,29 @@
       },
       "refresh_hardware_info": {
         "default": "mdi:refresh"
-      },
-      "identify": {
-        "default": "mdi:lightbulb-on"
       }
     },
     "image": {
       "background_image": {
         "default": "mdi:image"
       }
+    }
+  },
+  "services": {
+    "set_dial_value": {
+      "service": "mdi:gauge"
+    },
+    "set_dial_backlight": {
+      "service": "mdi:palette"
+    },
+    "set_dial_name": {
+      "service": "mdi:rename"
+    },
+    "set_dial_image": {
+      "service": "mdi:image"
+    },
+    "reload_dial": {
+      "service": "mdi:refresh"
     }
   }
 }

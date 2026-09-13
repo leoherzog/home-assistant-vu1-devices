@@ -1,33 +1,47 @@
 """DataUpdateCoordinator for VU1 Dials integration."""
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
-from .vu1_api import VU1APIClient, VU1APIError, VU1ConnectionError, VU1AuthError
+from .const import (
+    BACKLIGHT_CHANNELS,
+    CONF_BACKLIGHT_COLOR,
+    DATA_BINDING_MANAGER,
+    DOMAIN,
+)
+from .device_config import async_get_config_manager
+from .vu1_api import VU1APIClient, VU1APIError, VU1AuthError, VU1InvalidNameError
+
+if TYPE_CHECKING:
+    from . import VU1ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["VU1DataUpdateCoordinator", "_get_dial_client_and_coordinator"]
 
 
-class VU1DataUpdateCoordinator(DataUpdateCoordinator):
+class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Class to manage fetching VU1 data."""
+
+    config_entry: VU1ConfigEntry
+    hub_device_id: str
 
     def __init__(
         self,
         hass: HomeAssistant,
         client: VU1APIClient,
         update_interval: timedelta,
-        config_entry: ConfigEntry,
+        config_entry: VU1ConfigEntry,
     ) -> None:
         """Initialize coordinator."""
         super().__init__(
@@ -36,6 +50,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             name=DOMAIN,
             config_entry=config_entry,
             update_interval=update_interval,
+            always_update=False,
         )
         self.client = client
         # Track last known names to detect server-side changes
@@ -44,14 +59,10 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         self._name_change_grace_periods: dict[str, Any] = {}
         self._behavior_change_grace_periods: dict[str, Any] = {}
         self._grace_period_seconds = 10
-        # Store device identifier string for via_device relationships, not internal device.id
-        self.server_device_identifier: str | None = None
-        # Binding manager reference (set later)
-        self._binding_manager: Any = None
-        # Callbacks for adding new entities when dials are discovered
-        self._new_dial_callbacks: list[Any] = []
-        # Track known dial UIDs for detecting new dials
-        self._known_dial_uids: set[str] = set()
+        # Hub device identifier, used for via_device relationships
+        self.server_device_identifier = f"vu1_server_{config_entry.entry_id}"
+        # Dials whose status fetch is failing, so the failure is logged once
+        self._failed_dials: set[str] = set()
 
     def _prune_expired_grace_periods(self) -> None:
         """Remove expired entries from grace period dicts to prevent unbounded growth."""
@@ -68,145 +79,114 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
             dials = await self.client.get_dial_list()
 
             if not isinstance(dials, list):
-                _LOGGER.error("Unexpected dial list format: %s", type(dials))
-                raise UpdateFailed("Invalid dial list format")
+                raise UpdateFailed(translation_domain=DOMAIN, translation_key="not_vu1_server", translation_placeholders={"url": self.client.base_url})
 
-            # Get detailed status for each dial
+            dials = [dial for dial in dials if isinstance(dial, dict) and "uid" in dial]
+            results = await asyncio.gather(
+                *(self.client.get_dial_status(dial["uid"]) for dial in dials),
+                *(self.client.get_dial_image_crc(dial["uid"]) for dial in dials),
+                return_exceptions=True,
+            )
+
             dial_data: dict[str, Any] = {}
-            dial_refs: list[tuple[str, dict[str, Any]]] = []
-            dial_tasks: list[Any] = []
-            crc_tasks: list[Any] = []
-
-            for dial in dials:
-                if not isinstance(dial, dict) or "uid" not in dial:
-                    _LOGGER.warning("Invalid dial data: %s", dial)
-                    continue
-
+            for dial, status, image_crc in zip(dials, results, results[len(dials):]):
                 dial_uid = dial["uid"]
-                dial_refs.append((dial_uid, dial))
-                dial_tasks.append(self.client.get_dial_status(dial_uid))
-                crc_tasks.append(self.client.get_dial_image_crc(dial_uid))
+                if isinstance(image_crc, BaseException):
+                    image_crc = None
 
-            if dial_refs:
-                results = await asyncio.gather(*dial_tasks, return_exceptions=True)
-                crc_results = await asyncio.gather(*crc_tasks, return_exceptions=True)
-            else:
-                results = []
-                crc_results = []
+                if isinstance(status, BaseException):
+                    if dial_uid not in self._failed_dials:
+                        self._failed_dials.add(dial_uid)
+                        _LOGGER.info("Failed to get status for dial %s: %s", dial_uid, status)
+                    status = {}
+                elif dial_uid in self._failed_dials:
+                    self._failed_dials.discard(dial_uid)
+                    _LOGGER.info("Status for dial %s is available again", dial_uid)
 
-            for (dial_uid, dial), result, crc_result in zip(dial_refs, results, crc_results):
-                image_crc = None if isinstance(crc_result, BaseException) else crc_result
-
-                if isinstance(result, BaseException):
-                    if isinstance(result, VU1APIError):
-                        _LOGGER.warning("Failed to get status for dial %s: %s", dial_uid, result)
-                    elif isinstance(result, asyncio.CancelledError):
-                        _LOGGER.debug("Status update cancelled for dial %s", dial_uid)
-                    else:
-                        _LOGGER.error("Unexpected error getting status for dial %s", dial_uid, exc_info=result)
-                    dial_data[dial_uid] = {**dial, "detailed_status": {}, "image_crc": image_crc}
-                    continue
-
-                status: dict[str, Any] = result
                 dial_data[dial_uid] = {**dial, "detailed_status": status, "image_crc": image_crc}
 
-                await self._sync_name_from_server(dial_uid, dial.get("dial_name"))
-                await self._check_server_behavior_change(dial_uid, status)
+                if status:
+                    self._sync_device_registry(dial_uid, dial, status)
+                    await self._check_server_behavior_change(dial_uid, status)
+                    await self._async_restore_backlight(dial_uid, status)
 
-            if self._binding_manager:
-                await self._binding_manager.async_update_bindings(
-                    {"dials": dial_data}, self.config_entry.entry_id
+            if dial_data:
+                ir.async_delete_issue(self.hass, DOMAIN, "no_dials")
+            else:
+                ir.async_create_issue(
+                    self.hass, DOMAIN, "no_dials",
+                    is_fixable=False, severity=ir.IssueSeverity.WARNING, translation_key="no_dials",
                 )
 
-            # Detect dials provisioned outside HA (e.g. via the server web UI).
-            # Diff the freshly fetched UIDs against the known set and schedule
-            # entity creation for genuinely new dials. Run as a task so it
-            # executes after this refresh completes and self.data is populated,
-            # rather than re-entering listeners mid-refresh.
-            current_uids = set(dial_data.keys())
-            new_uids = current_uids - self._known_dial_uids
-            if new_uids:
-                self.update_known_dials(current_uids)
-                self.hass.async_create_task(self.async_notify_new_dials(new_uids))
+            await self.hass.data[DATA_BINDING_MANAGER].async_update_bindings({"dials": dial_data})
 
             return {"dials": dial_data}
 
         except VU1AuthError as err:
-            # Auth errors - the API key is no longer valid; surface a repair
-            # and start a reauth flow rather than backing off forever.
-            _LOGGER.error("VU1 authentication error: %s", err)
-            raise ConfigEntryAuthFailed(f"Authentication error: {err}") from err
-        except VU1ConnectionError as err:
-            # Connection errors - standard retry (no retry_after)
-            _LOGGER.error("VU1 connection error: %s", err)
-            raise UpdateFailed(f"Connection error: {err}") from err
+            raise ConfigEntryAuthFailed(str(err)) from err
         except VU1APIError as err:
-            # API errors - moderate backoff
-            _LOGGER.error("VU1 API error: %s", err)
-            raise UpdateFailed(
-                f"API error: {err}",
-                retry_after=60,  # 1 minute
-            ) from err
-        except Exception as err:
-            _LOGGER.exception("Unexpected error updating VU1 data")
-            raise UpdateFailed(f"Unexpected error: {err}") from err
+            raise UpdateFailed(str(err)) from err
 
-    def set_binding_manager(self, binding_manager: Any) -> None:
-        """Set the binding manager reference."""
-        self._binding_manager = binding_manager
-
-    def register_new_dial_callback(self, callback: Any) -> Callable[[], None]:
-        """Register a callback to be called when new dials are discovered.
-
-        Returns an unsubscribe function that removes the callback.
-        """
-        self._new_dial_callbacks.append(callback)
-
-        def unsubscribe() -> None:
-            """Remove the callback from the list."""
-            if callback in self._new_dial_callbacks:
-                self._new_dial_callbacks.remove(callback)
-
-        return unsubscribe
-
-    def update_known_dials(self, dial_uids: set[str]) -> None:
-        """Update the set of known dial UIDs."""
-        self._known_dial_uids = dial_uids
-
-    async def async_notify_new_dials(self, new_dial_uids: set[str]) -> None:
-        """Notify callbacks about newly discovered dials."""
-        if not new_dial_uids:
-            return
-
-        dial_data = self.data.get("dials", {}) if self.data else {}
-        # Iterate over a copy to allow safe modification during iteration
-        for callback in list(self._new_dial_callbacks):
-            try:
-                new_dials_data = {uid: dial_data.get(uid, {}) for uid in new_dial_uids}
-                await callback(new_dials_data)
-            except Exception as err:
-                _LOGGER.error("Error in new dial callback: %s", err)
-
-    async def _sync_name_from_server(self, dial_uid: str, server_name: str | None) -> None:
-        """Sync device name from server to Home Assistant if it has changed."""
-        if not server_name:
-            return
-
-        # Check if we're in a grace period (change originated from HA)
-        current_time = dt_util.utcnow()
+    def _sync_device_registry(
+        self, dial_uid: str, dial: dict[str, Any], status: dict[str, Any]
+    ) -> None:
+        """Sync the server-side name and firmware/hardware versions to the device registry."""
+        server_name = dial.get("dial_name")
+        # Ignore server names during a grace period (change originated from HA)
         grace_end = self._name_change_grace_periods.get(dial_uid)
-        if grace_end and current_time < grace_end:
-            _LOGGER.debug("Ignoring server name change for %s during grace period", dial_uid)
-            return
+        if grace_end and dt_util.utcnow() < grace_end:
+            server_name = None
+        elif server_name:
+            self._previous_dial_names[dial_uid] = server_name
 
         device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get_device(identifiers={(DOMAIN, dial_uid)})
+        device = device_registry.async_get_device_by_identifier((DOMAIN, dial_uid), self.config_entry.entry_id)
+        if device is None:
+            return
 
-        if device and not device.name_by_user and device.name != server_name:
-            _LOGGER.info("Server name for %s changed ('%s' -> '%s'). Updating device.", dial_uid, device.name, server_name)
-            device_registry.async_update_device(device.id, name=server_name)
+        changes = {
+            "name": None if device.name_by_user else server_name,
+            "sw_version": status.get("fw_version"),
+            "hw_version": status.get("hw_version"),
+        }
+        changes = {key: value for key, value in changes.items() if value and getattr(device, key) != value}
+        if changes:
+            device_registry.async_update_device(device.id, **changes)
 
-        self._previous_dial_names[dial_uid] = server_name
+    async def _async_restore_backlight(self, dial_uid: str, status: dict[str, Any]) -> None:
+        """Re-apply the stored backlight when the server reports it reset to off.
+
+        The VU1 server does not persist backlight across its own restarts. It also
+        strips white from its reports, so a white-only stored colour cannot be told
+        apart from a reset and is not restored.
+        """
+        backlight = status.get("backlight")
+        color = async_get_config_manager(self.hass).get_dial_config(dial_uid)[CONF_BACKLIGHT_COLOR]
+        if not backlight or any(backlight.values()) or not any(color[:3]):
+            return
+        try:
+            await self.client.set_dial_backlight(dial_uid, *color)
+        except VU1APIError as err:
+            _LOGGER.debug("Failed to restore backlight for dial %s: %s", dial_uid, err)
+            return
+        status["backlight"] = dict(zip(BACKLIGHT_CHANNELS, color))
+
+    async def async_set_backlight(
+        self, dial_uid: str, red: int, green: int, blue: int, white: int | None = None
+    ) -> None:
+        """Set a dial's RGBW backlight, persist it, and publish it optimistically.
+
+        ``white=None`` keeps the stored white channel.
+        """
+        config_manager = async_get_config_manager(self.hass)
+        if white is None:
+            white = config_manager.get_dial_config(dial_uid)[CONF_BACKLIGHT_COLOR][3]
+        await self.client.set_dial_backlight(dial_uid, red, green, blue, white)
+        color = [red, green, blue, white]
+        await config_manager.async_update_dial_config(dial_uid, {CONF_BACKLIGHT_COLOR: color})
+        if dial := self.data["dials"].get(dial_uid):
+            dial["detailed_status"]["backlight"] = dict(zip(BACKLIGHT_CHANNELS, color))
+            self.async_update_listeners()
 
     def mark_name_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a name change originated from HA to prevent sync loops."""
@@ -222,24 +202,23 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         try:
             # 1. Update the VU1 Server
             await self.client.set_dial_name(dial_uid, new_name)
-            # 2. Update our internal tracker
-            self._previous_dial_names[dial_uid] = new_name
-
-            # 3. Update the HA device registry
-            device_registry = dr.async_get(self.hass)
-            device = device_registry.async_get_device(identifiers={(DOMAIN, dial_uid)})
-            if device:
-                device_registry.async_update_device(device.id, name=new_name)
-
-            _LOGGER.info("Successfully synced name '%s' to server for dial %s", new_name, dial_uid)
-            # 4. Refresh coordinator to ensure consistency
-            await self.async_request_refresh()
-
-        except VU1APIError as err:
-            _LOGGER.error("Failed to set dial name for %s on server: %s", dial_uid, err)
+        except VU1APIError:
             # Clear grace period on failure to allow future updates
             self._name_change_grace_periods.pop(dial_uid, None)
             raise
+
+        # 2. Update our internal tracker
+        self._previous_dial_names[dial_uid] = new_name
+
+        # 3. Update the HA device registry
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device_by_identifier((DOMAIN, dial_uid), self.config_entry.entry_id)
+        if device:
+            device_registry.async_update_device(device.id, name=new_name)
+
+        _LOGGER.info("Successfully synced name '%s' to server for dial %s", new_name, dial_uid)
+        # 4. Refresh coordinator to ensure consistency
+        await self.async_request_refresh()
 
     async def async_handle_ha_name_change(self, dial_uid: str, new_name: str) -> None:
         """Handle device name change originating from the HA UI.
@@ -248,22 +227,34 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         HA-originated changes (mark_name_change_from_ha), and nothing in the
         integration writes name_by_user, so there is no server->HA->server
         feedback loop to suppress. The grace check belongs only in
-        _sync_name_from_server (server->HA echo). The _previous_dial_names
+        _sync_device_registry (server->HA echo). The _previous_dial_names
         comparison below already dedupes; an additional grace check here would
         silently drop a second user rename within the grace window and leave
         HA and the server permanently desynced.
         """
+        issue_id = f"invalid_dial_name_{dial_uid}"
+        ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+
         # Check if name actually changed
         if self._previous_dial_names.get(dial_uid) == new_name:
             return
 
         _LOGGER.info("Device name changed in HA for dial %s: '%s'", dial_uid, new_name)
 
-        # Sync to server using existing method
         try:
             await self.async_set_dial_name(dial_uid, new_name)
-        except Exception as err:
-            _LOGGER.error("Failed to sync device name to server: %s", err)
+        except VU1InvalidNameError as err:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="invalid_dial_name",
+                translation_placeholders={"name": new_name, "error": str(err)},
+            )
+        except VU1APIError as err:
+            _LOGGER.warning("Failed to sync device name '%s' to server: %s", new_name, err)
 
     def mark_behavior_change_from_ha(self, dial_uid: str) -> None:
         """Mark that a behavior change originated from HA to prevent sync loops."""
@@ -276,9 +267,6 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _check_server_behavior_change(self, dial_uid: str, status: dict[str, Any]) -> None:
         """Check if server behavior settings changed and sync to HA."""
-        if not status:
-            return
-
         current_time = dt_util.utcnow()
         grace_end = self._behavior_change_grace_periods.get(dial_uid)
         if grace_end and current_time < grace_end:
@@ -289,7 +277,6 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
         if not easing_config:
             return
 
-        from .device_config import async_get_config_manager
         config_manager = async_get_config_manager(self.hass)
         current_config = config_manager.get_dial_config(dial_uid)
         # Convert server values to int with fallbacks for invalid data
@@ -330,18 +317,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator):
                 )
 
         if config_changed:
-            # Update HA config to match server values
-            updated_config = {**current_config, **server_values}
-            await config_manager.async_update_dial_config(dial_uid, updated_config)
+            await config_manager.async_update_dial_config(dial_uid, server_values)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
 
 
 def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tuple[VU1APIClient, VU1DataUpdateCoordinator] | None:
-    """Find the correct client and coordinator for a dial."""
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
-            continue
-        coord = entry.runtime_data.coordinator
-        if coord.data and dial_uid in coord.data.get("dials", {}):
-            return entry.runtime_data.client, coord
+    """Return the client and coordinator of the entry that reports this dial."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    runtime_data = getattr(entries[0], "runtime_data", None) if entries else None
+    if runtime_data and runtime_data.coordinator.data and dial_uid in runtime_data.coordinator.data["dials"]:
+        return runtime_data.client, runtime_data.coordinator
     return None
