@@ -199,11 +199,7 @@ Both options take effect immediately on save (the integration reloads itself).
 
 ### License
 
-Feel free to take a look at the source and adapt as you please. This source is licensed as follows:
-
-[![Creative Commons License](https://i.creativecommons.org/l/by-sa/4.0/88x31.png)](http://creativecommons.org/licenses/by-sa/4.0/)
-
-Streacom VU1 Dials is licensed under a [Creative Commons Attribution-ShareAlike 4.0 International License](http://creativecommons.org/licenses/by-sa/4.0/).
+Feel free to take a look at the source and adapt as you please. Streacom VU1 Dials is licensed under the [MIT License](LICENSE).
 
 ---
 
