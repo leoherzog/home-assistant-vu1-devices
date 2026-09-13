@@ -190,7 +190,7 @@ The client sends `key` on the unauthenticated endpoints too. The server persists
 - Keep changes small; prefer deleting code. No migration or compatibility code, no comments narrating a change, no try/except that only logs and re-raises.
 - Import and lint gate:
   ```
-  uv run --no-project --python 3.14 --with homeassistant==2026.9.2 python -c "import importlib,pkgutil,custom_components.vu1_dials as p;[importlib.import_module('custom_components.vu1_dials.'+m.name) for m in pkgutil.iter_modules(p.__path__)];print('import ok')" && uvx ruff check custom_components/vu1_dials
+  uv run --no-project --python 3.14 --with homeassistant==2026.9.2 python -c "import importlib,pkgutil,custom_components.vu1_dials as p;[importlib.import_module('custom_components.vu1_dials.'+m.name) for m in pkgutil.iter_modules(p.__path__)];print('import ok')" && uvx ruff@0.16.7 check custom_components/vu1_dials
   ```
 - Line endings are mixed per file (`git ls-files --eol`); preserve them. CRLF: `__init__.py`, `button.py`, `config_flow.py`, `const.py`, `coordinator.py`, `diagnostics.py`, `image.py`, `light.py`, `select.py`, `sensor.py`, `vu1_api.py`, `services.yaml`, `strings.json`, `translations/en.json`, `hacs.json`, `README.md`. Everything else is LF.
 - Edit `strings.json` and `translations/en.json` together.
