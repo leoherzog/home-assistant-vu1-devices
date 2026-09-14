@@ -197,4 +197,3 @@ The client sends `key` on the unauthenticated endpoints too. The server persists
 - Edit `strings.json` and `translations/en.json` together.
 - CI (`.github/workflows/hacs.yml`) runs the HACS action and hassfest on push, pull request, daily and on demand.
 - Debug logging: `logger: logs: custom_components.vu1_dials: debug`. Persisted settings are in `.storage/vu1_dials_dial_configs`.
-- `developers.home-assistant/` is a local copy of the HA developer docs for reference.
