@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .config_entities import VU1BoundEntitySensor, VU1UpdateModeSensor
+from .coordinator import dial_server_name, server_version
 from .entity import VU1DialEntity, async_setup_dial_entities
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ class VU1DiagnosticSensorBase(VU1DialEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         """Return the state of the sensor."""
-        return self.dial_data.get("detailed_status", {}).get(self._data_key)
+        return server_version(self.dial_data.get("detailed_status", {}).get(self._data_key))
 
 
 class VU1ServerNameSensor(VU1DialEntity, SensorEntity):
@@ -78,4 +79,4 @@ class VU1ServerNameSensor(VU1DialEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         """Return the device name from the VU-Server."""
-        return self.dial_data.get("dial_name")
+        return dial_server_name(self.dial_data)

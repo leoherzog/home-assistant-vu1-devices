@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import VU1ConfigEntry
 from .const import CONF_API_KEY, CONF_HOST
+from .coordinator import image_basename
 from .device_config import async_get_config_manager
 
 TO_REDACT = {CONF_API_KEY, CONF_HOST}
@@ -50,12 +51,15 @@ async def async_get_config_entry_diagnostics(
         "dial_configs": dial_configs,
     }
 
-    # Add per-dial information (redact sensitive data)
+    # Add per-dial information
     for dial_uid, dial_data in coordinator_data.get("dials", {}).items():
+        status = dict(dial_data.get("detailed_status", {}))
+        if "image_file" in status:
+            status["image_file"] = image_basename(status["image_file"])
         diagnostics_data["dials"][dial_uid] = {
             "dial_name": dial_data.get("dial_name"),
-            "image_file": dial_data.get("image_file"),
-            "detailed_status": dial_data.get("detailed_status", {}),
+            "image_file": image_basename(dial_data.get("image_file")),
+            "detailed_status": status,
         }
 
     diagnostics_data["sensor_bindings"] = runtime_data.binding_manager.async_get_bindings_summary()

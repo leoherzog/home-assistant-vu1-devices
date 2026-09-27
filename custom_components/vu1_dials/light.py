@@ -49,7 +49,7 @@ class VU1BacklightLight(VU1DialEntity, LightEntity):
         self._attr_unique_id = f"{dial_uid}_backlight"
         self._attr_translation_key = "backlight"
 
-        # The dial hardware is RGBW; the server accepts white but does not report it.
+        # The dial hardware is RGBW; /dial/list omits white.
         self._attr_supported_color_modes = {ColorMode.RGBW}
         self._attr_color_mode = ColorMode.RGBW
 

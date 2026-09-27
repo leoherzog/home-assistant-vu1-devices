@@ -49,14 +49,14 @@ get_dial_image(uid) -> bytes
 set_dial_value(uid, value)                       # 0-100
 set_dial_backlight(uid, red, green, blue, white) # 0-100 each, white required
 set_dial_name(uid, name)                         # validates 3-30 of [A-Za-z0-9 _-]
-set_dial_image(uid, image_data)                  # PNG/JPEG magic bytes, <= 2 MB, multipart field imgfile
+set_dial_image(uid, image_data)                  # PNG/JPEG magic bytes, <= 2 MB; Pillow (in a thread) letterboxes it on white into a 200x144 greyscale PNG; multipart imgfile, force=true
 set_dial_easing(uid, period, step)
 set_backlight_easing(uid, period, step)
-reload_dial(uid)                                 # data:false -> dial_not_found
+reload_dial(uid)                                 # data:false -> dial_not_found; empty fw_hash or all-zero easing (hardware read failed) -> dial_offline
 provision_new_dials()                            # admin_key; VU1AuthError -> provision_requires_master_key
 ```
 
-Errors: `VU1APIError(HomeAssistantError)` carries translation keys, so entity actions and services let it propagate unwrapped. Subclasses: `VU1AuthError` (401/403), `VU1InvalidNameError` and `VU1InvalidImageError` (both also `ServiceValidationError`). Everything else is a plain `VU1APIError` whose translation key tells the cases apart: `cannot_connect` (aiohttp error/timeout), `dial_offline` (503/406, or 200 + `status:"fail"` with the offline message), `not_vu1_server` (non-JSON body), `api_error`.
+Errors: `VU1APIError(HomeAssistantError)` carries translation keys, so entity actions and `set_dial_name` let it propagate unwrapped; the other services collect per-dial errors into one `action_failed` error. Subclasses: `VU1AuthError` (401, `invalid_auth`), `VU1InvalidNameError` and `VU1InvalidImageError` (both also `ServiceValidationError`). Everything else is a plain `VU1APIError` whose translation key tells the cases apart: `cannot_connect` (aiohttp error/timeout), `dial_offline` (503/406, or a 2xx with `status:"fail"` and the offline message), `dial_access_denied` (403, key not granted the dial), `not_vu1_server` (body is not a JSON object), `dial_not_found` (`reload_dial` got `data:false`), `api_error`.
 
 `discover_vu1_addon(session)`: with `SUPERVISOR_TOKEN`, lists Supervisor add-ons, picks a slug containing `vu-server-addon` and returns `{host: slug with _ -> -, port: 5340, running}`, else `{}`.
 
@@ -66,18 +66,20 @@ Errors: `VU1APIError(HomeAssistantError)` carries translation keys, so entity ac
 
 ```python
 coordinator.data = {"dials": {uid: {
-    **dial_list_item,          # uid, dial_name, value, backlight, image_file ("img_<uid>" or "img_blank"), ...
+    **dial_list_item,          # uid, dial_name, value, backlight, image_file (server path ending in "img_<uid>" or "img_blank"), ...
     "detailed_status": {...},  # /status data; {} when that call failed
-    "image_crc": "A1B2C3D4",   # or None when that call failed
+    "image_crc": "A1B2C3D4",   # "00000000" without a request when image_file's basename is "img_blank"; None when the call failed
 }}}
 ```
 
-Each poll: dial list, then status and image CRC for every dial concurrently. A failed status is logged at info once per outage. For a dial with status it runs `_sync_device_registry` (server name, `sw_version`, `hw_version`), `_check_server_behavior_change` (server easing copied into the config store) and `_async_restore_backlight`, then `binding_manager.async_update_bindings`. An empty dial list creates the repair issue `no_dials`; any dial deletes it (so does unloading the entry). `VU1AuthError` raises `ConfigEntryAuthFailed` (reauth); any other `VU1APIError` raises `UpdateFailed` (`ConfigEntryNotReady` on the first refresh).
+Each poll: dial list, then status and image CRC for every dial concurrently. A failed status is logged at info once per outage. For a dial with status it runs the unresponsive check, `_sync_device_registry` (server name, `sw_version`, `hw_version`), `_check_server_behavior_change` (server easing copied into the config store; when any period or step is 0, which a failed `/reload` persists and the server sends to the dial on its next start, the stored easing is written back instead), and `_async_restore_backlight`, then `binding_manager.async_update_bindings`. An empty dial list creates the repair issue `no_dials`; any dial deletes it (so does unloading the entry). `VU1AuthError` raises `ConfigEntryAuthFailed` (reauth); any other `VU1APIError` raises `UpdateFailed` (`ConfigEntryNotReady` on the first refresh). When `detailed_status` has `value_unresponsive` or `backlight_unresponsive`, the repair issue `dial_unresponsive_<uid>` (warning, not fixable) is created; it is deleted when both flags clear, the dial disappears or the entry unloads (`async_clear_issues`). Entities stay available, because HA skips entity service calls on unavailable entities and a new value or colour is what makes the server retry.
 
-- **Backlight**: `async_set_backlight(uid, red, green, blue, white=None)` is the HA write path (light, service, device action). It sends all four channels (`white=None` keeps the stored white), persists `backlight_color`, writes the value into `detailed_status` and calls `async_update_listeners()`. The server resets backlight to 0 on restart but keeps easing, so `_async_restore_backlight` re-applies the stored colour on every poll where the server reports all channels 0 and the stored red, green or blue is non-zero (a white-only colour is not restored, since the server strips white from its reports). The server may omit `white`; readers fall back to the stored white. The identify button flashes white through the client for 1 s, then restores the previous colour through `async_set_backlight`.
+Server placeholders count as missing: a `dial_name` that is empty or `"Not set"` (case-insensitive, `dial_server_name`) falls back to `VU1 Dial <uid>` and is never pushed to the registry, and a version or hash of `"?"` or `""` (`server_version`) is left out of `sw_version`/`hw_version` and makes the protocol-version and firmware-hash sensors `None`.
+
+- **Backlight**: `async_set_backlight(uid, red, green, blue, white=None)` is the HA write path (light, service, device action). It sends all four channels (`white=None` keeps the stored white), persists `backlight_color`, writes the value into `detailed_status` and calls `async_update_listeners()`. The server resets backlight to 0 on restart and provisioning but keeps easing, so `_async_restore_backlight` re-applies the stored colour on every poll where `/status` reports all channels 0 and any stored channel, white included, is non-zero. `/dial/list` omits `white`; when a channel is missing, readers fall back to the stored white. The identify button flashes white through the client for 1 s, then restores the previous colour through `async_set_backlight`.
 - **Name sync**: an HA rename (`name_by_user` change) calls `async_handle_ha_name_change`, which calls `async_set_dial_name` (server rename, device `name` update, 10 s grace period). `VU1InvalidNameError` creates the repair issue `invalid_dial_name_<uid>`; the next HA rename deletes it. Server to HA: `_sync_device_registry` updates the device `name` unless the device has `name_by_user` or is in its grace period, so a user-set HA name always wins.
 - **Easing**: HA-originated easing changes call `mark_behavior_change_from_ha` (10 s grace) so the next poll does not overwrite them with stale server values.
-- **Commands are optimistic**: entity actions and bindings write the new value into coordinator data in place instead of calling `async_request_refresh()`. Services refresh after the call, except `set_dial_backlight`: `/dial/list` strips `white` from the server's live backlight dict, so a list call before the server flushes a queued backlight write (200 ms) breaks that write. The device action does not refresh either.
+- **Value and backlight commands are optimistic**: the dial number, `async_set_backlight` and bindings write the new value into coordinator data in place instead of calling `async_request_refresh()`. The refresh-hardware-info and provision buttons and renames refresh. Services refresh after the call. The device action does not refresh.
 - `_get_dial_client_and_coordinator(hass, uid)` finds the loaded entry that reports a dial.
 
 ## Entities
@@ -90,18 +92,18 @@ All dial entities subclass `VU1DialEntity` (`entity.py`): `_attr_has_entity_name
 | number | `VU1ConfigNumber` x6 | `{uid}_{key}` | `value_min`, `value_max`, `dial_easing_period`, `dial_easing_step`, `backlight_easing_period`, `backlight_easing_step` | config. Easing numbers write to the server first, then the store. Min/max raise `value_min_not_less_than_max`. |
 | light | `VU1BacklightLight` | `{uid}_backlight` | `backlight` | RGBW only; HA 0-255 scaled to device 0-100; on when any channel > 0 |
 | select | `VU1BehaviorSelect` | `{uid}_behavior_preset` | `behavior_preset` | config. Options `responsive`/`balanced`/`smooth`; `None` when the stored easing matches none |
-| image | `VU1DialBackgroundImage` | `{uid}_background_image` | `background_image` | Cached bytes dropped when `image_file` or `image_crc` changes |
-| sensor | `VU1UpdateModeSensor` | `{uid}_update_mode_status` | `update_mode` | enum `automatic`/`manual` |
-| sensor | `VU1BoundEntitySensor` | `{uid}_bound_entity_status` | `bound_entity` | Bound entity_id, `None` in manual mode |
+| image | `VU1DialBackgroundImage` | `{uid}_background_image` | `background_image` | Cached bytes dropped when `image_file` or `image_crc` changes; attributes expose only the `image_file` basename |
+| sensor | `VU1UpdateModeSensor` | `{uid}_update_mode_status` | `update_mode` | no category; enum `automatic`/`manual` |
+| sensor | `VU1BoundEntitySensor` | `{uid}_bound_entity_status` | `bound_entity` | no category; bound entity_id, `None` in manual mode |
 | sensor | `VU1ServerNameSensor` | `{uid}_server_name` | `server_name` | diagnostic, enabled |
 | sensor | `VU1DiagnosticSensorBase` x2 | `{uid}_{protocol_version,fw_hash}` | `protocol_version`, `firmware_hash` | diagnostic, disabled by default (firmware and hardware versions are on the device) |
 | button | `VU1RefreshHardwareInfoButton` | `{uid}_refresh_hardware_info` | `refresh_hardware_info` | diagnostic; `reload_dial` then refresh |
 | button | `VU1IdentifyDialButton` | `{uid}_identify` | (device class `identify`) | diagnostic; white flash for 1 s, then restore |
-| button | `VU1ProvisionDialsButton` | `vu1_server_{entry_id}_provision_new_dials` | `provision_new_dials` | config, on the hub device; provision then `async_refresh()` |
+| button | `VU1ProvisionDialsButton` | `vu1_server_{entry_id}_provision_new_dials` | `provision_new_dials` | config, on the hub device; records each dial's value, provisions, `async_refresh()`, then re-sends the recorded value to manual dials whose value changed |
 
 `PARALLEL_UPDATES`: sensor 0, image 0, number/light/select/button 1.
 
-`VU1ConfigEntityBase` (config numbers, select, the two config sensors) subscribes to config-manager changes and holds `_apply_easing_config_to_server`.
+`VU1ConfigEntityBase` (config numbers, select, and the update-mode and bound-entity sensors, which clear the CONFIG category) subscribes to config-manager changes and holds `_apply_easing_config_to_server`.
 
 ## Dial config store (`device_config.py`)
 
@@ -111,10 +113,10 @@ All dial entities subclass `VU1DialEntity` (`entity.py`): `_attr_has_entity_name
 {
     "bound_entity": None,             # entity_id or None
     "value_min": 0.0, "value_max": 100.0,  # swapped if min > max
-    "backlight_color": [0, 0, 0, 0],  # RGBW 0-100; all zero = never set
+    "backlight_color": [0, 0, 0, 0],  # RGBW 0-100; all zero = off or never set
     "update_mode": "manual",          # or "automatic"
-    "dial_easing_period": 50, "dial_easing_step": 5,
-    "backlight_easing_period": 50, "backlight_easing_step": 5,
+    "dial_easing_period": 50, "dial_easing_step": 2,           # server database defaults
+    "backlight_easing_period": 100, "backlight_easing_step": 5,
 }
 ```
 
@@ -122,25 +124,26 @@ API: `get_dial_config(uid)` (a copy, defaults when unknown), `async_update_dial_
 
 ## Entity binding (`sensor_binding.py`)
 
-`VU1SensorBindingManager`, accessed with `async_get_binding_manager(hass)`. A binding exists while `update_mode == "automatic"` and `bound_entity` is set. One state listener per source entity, reference-counted across dials. A per-dial `Debouncer(cooldown=5, immediate=True)` applies the first change at once and then at most one update per 5 s. New bindings and changes to `BINDING_KEYS` (`bound_entity`, `update_mode`, `value_min`, `value_max`) apply the current state immediately.
+`VU1SensorBindingManager`, accessed with `async_get_binding_manager(hass)`. A binding exists while `update_mode == "automatic"`, `bound_entity` is set and exists, and a loaded entry reports the dial; missing prerequisites are retried on each poll. One state listener per source entity, reference-counted across dials. State changes pass through a per-dial `Debouncer(cooldown=5, immediate=True)`, which applies the first change at once and then at most one update per 5 s. New bindings and changes to `BINDING_KEYS` (`bound_entity`, `update_mode`, `value_min`, `value_max`) bypass it and apply the current state immediately.
 
 - Parsing: the state must fully match a number with an optional trailing non-digit unit (`"23.5 °C"`); anything else is ignored.
-- Mapping: linear to 0-100, clamped at the range ends, rounded; returns 50 when min == max. A mapped value equal to the dial's `detailed_status` value in coordinator data is not sent; otherwise it is sent and written into coordinator data, so a server restart or an outside change is corrected on the next state change.
+- Mapping: linear to 0-100, clamped at the range ends, rounded; returns 50 when min == max. A mapped value is not sent when it equals the dial's `detailed_status` value and neither `value_changed` nor `value_unresponsive` is set; otherwise it is sent and written into coordinator data with both flags cleared.
+- Reconcile: `async_update_bindings` runs on every poll with the freshly polled status and sends each active binding's mapped source value only when it differs from the status value, so a server restart, provisioning reset or outside change is corrected on the next poll. It ignores the flags because re-sending a pending or unresponsive value resets the server's retry backoff and unresponsive latch. A bound value of 0 is not restored after provisioning, which the server reports as a delivered 0.
 - After changing binding config call `async_reconfigure_dial_binding(uid)`.
 
 ## Services (`__init__.py`)
 
-Registered once in `async_setup`. Each schema is `vol.Schema({**cv.TARGET_SERVICE_FIELDS, ...})`; `services.yaml` targets `entity: integration: vu1_dials` (hassfest rejects device filters on targets) and its names/descriptions live in the `services` block of `strings.json`; `_resolve_dial_uids_from_call` maps every resolved entity (explicit, or via device/area/floor/label) to its registry device, adds only the explicitly targeted device ids, keeps the dial devices and raises `no_dials_targeted` when none match; an explicit entity counts as missing only when it is not in the state machine.
+Registered once in `async_setup`. Each schema is `vol.Schema({**cv.TARGET_SERVICE_FIELDS, ...})`; `services.yaml` targets `entity: integration: vu1_dials` (hassfest rejects device filters on targets) and its names/descriptions live in the `services` block of `strings.json`; `_resolve_dial_uids_from_call` maps every resolved entity (explicit, or via device/area/floor/label, which expand only to visible entities without an entity category) to its registry device, adds only the explicitly targeted device ids, keeps the dial devices and raises `no_dials_targeted` when none match; an explicit entity counts as missing only when it is not in the state machine.
 
 | Service | Fields |
 |---------|--------|
 | `set_dial_value` | `value` 0-100 (switches automatic dials to manual) |
 | `set_dial_backlight` | `red`, `green`, `blue` 0-100; optional `white` 0-100 (kept when omitted) |
-| `set_dial_name` | `name`; single target only (`single_dial_only`) |
+| `set_dial_name` | `name`; single target only (`single_dial_only`); updates the HA device name unless the device was renamed in HA |
 | `set_dial_image` | `media_content_id` (media selector dict or URI string); must resolve to a local file |
 | `reload_dial` | none |
 
-`_execute_dial_service_for_all(hass, uids, action_name, api_call, refresh=True)` runs `api_call(coordinator, uid)` for every dial concurrently, refreshes the coordinator once if `refresh` and any call succeeded, and raises one `action_failed` error listing failures (`ServiceValidationError` if every failure was one).
+`_execute_dial_service_for_all(hass, uids, action_name, api_call)` runs `api_call(coordinator, uid)` for every dial concurrently, refreshes the coordinator once if any call succeeded, and raises one `action_failed` error listing failures (`ServiceValidationError` if every failure was one).
 
 Adding a service: add `SERVICE_*`/`ATTR_*` to `const.py`; write a handler that calls `_resolve_dial_uids_from_call(hass, call)` and `_execute_dial_service_for_all(hass, uids, "my action", lambda coordinator, uid: coordinator.client.my_call(uid, ...))`; register it with `vol.Schema({**cv.TARGET_SERVICE_FIELDS, vol.Required(ATTR_MY_PARAM): ...})`; add its target/fields/selectors to `services.yaml`, its name/description/field names to the `services` block of `strings.json` and `translations/en.json`, and it to the `services` block of `icons.json`.
 
@@ -163,7 +166,7 @@ Adding a service: add `SERVICE_*`/`ATTR_*` to `const.py`; write a handler that c
 
 ## Diagnostics
 
-Keys: `config_entry` (`entry_id`, `domain`, redacted `title`, `data` and `options` with `api_key` and `host` redacted), `coordinator` (`last_update_success`, `update_interval`, `server_device_identifier`), `dials` (`dial_name`, `image_file`, `detailed_status`), `dial_configs`, `sensor_bindings` (from `async_get_bindings_summary()`).
+Keys: `config_entry` (`entry_id`, `domain`, redacted `title`, `data` and `options` with `api_key` and `host` redacted), `coordinator` (`last_update_success`, `update_interval`, `server_device_identifier`), `dials` (`dial_name`, `image_file` and `detailed_status` with `image_file` reduced to its basename), `dial_configs`, `sensor_bindings` (from `async_get_bindings_summary()`).
 
 ## VU1 Server API
 
@@ -172,19 +175,19 @@ Base `http://{host}:{port}/api/v0`, default port 5340. Responses are `{"status":
 | Method | Endpoint | Auth | Params / notes |
 |--------|----------|------|----------------|
 | GET | `/dial/list` | `key` | Dials the key may access; `backlight` has `white` removed |
-| GET | `/dial/{uid}/status` | none | Full dial dict |
-| GET | `/dial/{uid}/image/crc` | none | 8-char hex CRC32, `"00000000"` when no file |
-| GET | `/dial/{uid}/image/get` | none | Image bytes |
-| POST | `/dial/{uid}/image/set` | `key` | multipart `imgfile` |
+| GET | `/dial/{uid}/status` | `key` | Full dial dict |
+| GET | `/dial/{uid}/image/crc` | `key` | 8-char hex CRC32, `"00000000"` when no file |
+| GET | `/dial/{uid}/image/get` | `key` | Image bytes |
+| POST | `/dial/{uid}/image/set` | `key` | multipart `imgfile`; `force=true` sends it even when the CRC matches |
 | GET | `/dial/{uid}/set` | `key` | `value` |
 | GET | `/dial/{uid}/backlight` | `key` | `red`, `green`, `blue`, `white` (0-100) |
 | GET | `/dial/{uid}/name` | `key` | `name`, 3-30 of `[A-Za-z0-9 _-]` |
 | GET | `/dial/{uid}/easing/dial` | `key` | `period`, `step` |
 | GET | `/dial/{uid}/easing/backlight` | `key` | `period`, `step` |
 | GET | `/dial/{uid}/reload` | `key` | `data: false` for an unknown dial |
-| GET | `/dial/provision` | `admin_key` | Master key (level 99) only |
+| GET | `/dial/provision` | `admin_key` | Privilege level >= 99; the Web UI creates only level-1 keys, so in practice the master key |
 
-The client sends `key` on the unauthenticated endpoints too. The server persists names and easing but not backlight. `value` is the last commanded value, not a hardware readback. The add-on's master key is printed on every server start (`Provide '<key>' to your main application.`).
+Every `/dial/{uid}/...` endpoint returns 401 without a valid key and 403 when the key is not granted that dial. A key sees only the dials granted to it under API Keys in the Web UI's top bar; grants can be edited later and newly added dials must be granted. The server persists names and easing but not backlight. `value` is the last commanded value, not a hardware readback. The add-on uses VU-Server's public default master key, built into the Web UI; the server prints it on every start (`Provide '<key>' to your main application.`, info level).
 
 ## Working on this repo
 
@@ -195,5 +198,5 @@ The client sends `key` on the unauthenticated endpoints too. The server persists
   ```
 - Line endings are mixed per file (`git ls-files --eol`); preserve them. CRLF: `__init__.py`, `button.py`, `config_flow.py`, `const.py`, `coordinator.py`, `diagnostics.py`, `image.py`, `light.py`, `select.py`, `sensor.py`, `vu1_api.py`, `services.yaml`, `strings.json`, `translations/en.json`, `hacs.json`, `README.md`. Everything else is LF.
 - Edit `strings.json` and `translations/en.json` together.
-- CI (`.github/workflows/hacs.yml`) runs the HACS action and hassfest on push, pull request, daily and on demand.
+- CI (`.github/workflows/hacs.yml`) runs the HACS action and hassfest on push to main, pull request, daily and on demand.
 - Debug logging: `logger: logs: custom_components.vu1_dials: debug`. Persisted settings are in `.storage/vu1_dials_dial_configs`.

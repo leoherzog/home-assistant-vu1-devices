@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .config_entities import CONFIG_NUMBER_DESCRIPTIONS, VU1ConfigNumber
 from .const import DOMAIN
+from .coordinator import dial_server_name
 from .entity import VU1DialEntity, async_setup_dial_entities
 from .sensor_binding import async_switch_to_manual
 
@@ -79,4 +80,4 @@ class VU1DialNumber(VU1DialEntity, NumberEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
-        return {"dial_uid": self._dial_uid, "dial_name": self.dial_data.get("dial_name")}
+        return {"dial_uid": self._dial_uid, "dial_name": dial_server_name(self.dial_data)}

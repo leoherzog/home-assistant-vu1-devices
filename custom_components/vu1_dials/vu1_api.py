@@ -1,14 +1,17 @@
 """VU1 API Client for communicating with VU1 server."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
+from io import BytesIO
 from typing import Any
 
 import aiohttp
 from aiohttp import ClientError, ClientTimeout
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from PIL import Image, ImageOps
 
 from .const import DOMAIN
 
@@ -19,6 +22,8 @@ __all__ = ["DEFAULT_PORT", "DEFAULT_TIMEOUT", "VU1APIClient", "VU1APIError", "VU
 DEFAULT_PORT = 5340
 DEFAULT_TIMEOUT = 10
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
+# The server streams the pixel matrix as-is, so images must match the panel exactly.
+DISPLAY_SIZE = (200, 144)
 
 # Exact message the VU1 server returns (HTTP 200 + status:"fail" on dial/set and
 # dial/status, HTTP 503 on setRaw/backlight/image) when a dial is offline.
@@ -30,7 +35,7 @@ class VU1APIError(HomeAssistantError):
 
 
 class VU1AuthError(VU1APIError):
-    """Exception raised for authentication errors (401/403)."""
+    """Exception raised when the API key is rejected (401)."""
 
 
 class VU1InvalidNameError(VU1APIError, ServiceValidationError):
@@ -64,14 +69,9 @@ class VU1APIClient:
         self._session = session
 
     def _auth_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Return request params with the VU1 API key attached.
-
-        The key is appended unless the caller already supplied an ``admin_key``
-        (used by admin-only endpoints) or no API key is configured.
-        """
-        if params is None:
-            params = {}
-        if self.api_key and "admin_key" not in params:
+        """Return request params with ``key`` attached unless the caller passed ``admin_key``."""
+        params = dict(params or {})
+        if "admin_key" not in params:
             params["key"] = self.api_key
         return params
 
@@ -126,8 +126,10 @@ class VU1APIClient:
     @staticmethod
     def _status_error(status: int, message: str | None) -> VU1APIError:
         """Convert an HTTP error status to the VU1 exception hierarchy."""
-        if status in (401, 403):
+        if status == 401:
             return VU1AuthError(translation_domain=DOMAIN, translation_key="invalid_auth", translation_placeholders={"message": str(message)})
+        if status == 403:
+            return VU1APIError(translation_domain=DOMAIN, translation_key="dial_access_denied")
         if status in (503, 406):
             return VU1APIError(translation_domain=DOMAIN, translation_key="dial_offline", translation_placeholders={"message": str(message)})
         return VU1APIError(translation_domain=DOMAIN, translation_key="api_error", translation_placeholders={"message": f"HTTP {status} {message}"})
@@ -166,7 +168,7 @@ class VU1APIClient:
     async def set_dial_name(self, dial_uid: str, name: str) -> None:
         """Set dial name.
 
-        Server requires 3-30 characters, only [a-z0-9\\-_ ] allowed.
+        Server requires 3-30 characters of letters, digits, '-', '_' or space.
         """
         if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9\-_ ]{3,30}", name, re.IGNORECASE):
             raise VU1InvalidNameError(translation_domain=DOMAIN, translation_key="invalid_dial_name")
@@ -182,27 +184,35 @@ class VU1APIClient:
         return response.get("data")
 
     async def set_dial_image(self, dial_uid: str, image_data: bytes) -> None:
-        """Set dial background image (PNG or JPEG, at most 2 MB) via multipart upload."""
-        if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
-            subtype = "png"
-        elif image_data.startswith(b"\xff\xd8\xff"):
-            subtype = "jpeg"
-        else:
+        """Set dial background image from a PNG or JPEG of at most 2 MB.
+
+        The image is letterboxed on white into a 200x144 greyscale PNG before upload.
+        """
+        if not image_data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")) or len(image_data) > MAX_IMAGE_BYTES:
             raise VU1InvalidImageError(translation_domain=DOMAIN, translation_key="invalid_image")
-        if len(image_data) > MAX_IMAGE_BYTES:
-            raise VU1InvalidImageError(translation_domain=DOMAIN, translation_key="invalid_image")
+        try:
+            png = await asyncio.to_thread(_fit_to_display, image_data)
+        except (OSError, Image.DecompressionBombError) as err:
+            raise VU1InvalidImageError(translation_domain=DOMAIN, translation_key="invalid_image") from err
 
         form = aiohttp.FormData()
-        form.add_field("imgfile", image_data, filename=f"background.{subtype}", content_type=f"image/{subtype}")
+        form.add_field("imgfile", png, filename="background.png", content_type="image/png")
 
-        _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(image_data))
-        await self._request("POST", f"api/{API_VERSION}/dial/{dial_uid}/image/set", form=form)
+        _LOGGER.debug("Uploading image to dial %s (%d bytes)", dial_uid, len(png))
+        await self._request("POST", f"api/{API_VERSION}/dial/{dial_uid}/image/set", {"force": "true"}, form=form)
 
     async def reload_dial(self, dial_uid: str) -> None:
-        """Reload dial hardware info."""
+        """Reload dial hardware info.
+
+        Raises ``dial_offline`` when the dial did not answer: the server then reports
+        an empty ``fw_hash`` or all-zero easing and still returns ``ok``.
+        """
         response = await self._request("GET", f"api/{API_VERSION}/dial/{dial_uid}/reload")
-        if response.get("data") is False:
+        data = response.get("data")
+        if data is False:
             raise VU1APIError(translation_domain=DOMAIN, translation_key="dial_not_found", translation_placeholders={"dial_uid": dial_uid})
+        if not isinstance(data, dict) or not data.get("fw_hash") or not any((data.get("easing") or {}).values()):
+            raise VU1APIError(translation_domain=DOMAIN, translation_key="dial_offline", translation_placeholders={"message": OFFLINE_MESSAGE})
 
     async def set_dial_easing(self, dial_uid: str, period: int, step: int) -> None:
         """Set dial easing configuration."""
@@ -216,12 +226,25 @@ class VU1APIClient:
     async def provision_new_dials(self) -> None:
         """Provision new dials that have been detected by the server.
 
-        Requires the master key (admin privileges). Regular API keys will fail.
+        Requires an admin key with privilege level 99 or higher, such as the master key.
         """
         try:
             await self._request("GET", f"api/{API_VERSION}/dial/provision", {"admin_key": self.api_key})
         except VU1AuthError as err:
             raise VU1AuthError(translation_domain=DOMAIN, translation_key="provision_requires_master_key") from err
+
+
+def _fit_to_display(image_data: bytes) -> bytes:
+    """Return ``image_data`` as a greyscale PNG letterboxed on white to ``DISPLAY_SIZE``."""
+    with Image.open(BytesIO(image_data)) as img:
+        img = ImageOps.exif_transpose(img)
+        # convert("L") drops alpha without compositing, which turns transparent pixels black.
+        if img.has_transparency_data:
+            img = Image.alpha_composite(Image.new("RGBA", img.size, "white"), img.convert("RGBA"))
+        fitted = ImageOps.pad(img.convert("L"), DISPLAY_SIZE, color=255)
+    out = BytesIO()
+    fitted.save(out, format="PNG")
+    return out.getvalue()
 
 
 async def discover_vu1_addon(session: aiohttp.ClientSession) -> dict[str, Any]:

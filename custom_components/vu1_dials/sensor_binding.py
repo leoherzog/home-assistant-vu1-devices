@@ -29,7 +29,7 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = ["BINDING_KEYS", "VU1SensorBindingManager", "async_get_binding_manager"]
 
 # Debounce settings
-DEBOUNCE_SECONDS = 5  # Minimum seconds between API calls per dial
+DEBOUNCE_SECONDS = 5  # Cooldown between state-change updates per dial
 
 # Config keys that affect how a sensor maps onto a dial
 BINDING_KEYS = (CONF_BOUND_ENTITY, CONF_UPDATE_MODE, CONF_VALUE_MIN, CONF_VALUE_MAX)
@@ -55,16 +55,23 @@ class VU1SensorBindingManager:
         self._missing_entities: set[str] = set()
 
     async def async_update_bindings(self, coordinator_data: dict[str, Any]) -> None:
-        """Update bindings based on current dial configurations."""
-        existing_dials = set(coordinator_data["dials"])
-        for dial_uid in set(self._bindings) - existing_dials:
+        """Update bindings from freshly polled data and re-send any bound value the dial does not show."""
+        dials = coordinator_data["dials"]
+        for dial_uid in set(self._bindings) - dials.keys():
             await self._remove_binding(dial_uid)
 
-        for dial_uid in existing_dials:
-            await self._update_binding(dial_uid, self._config_manager.get_dial_config(dial_uid))
+        for dial_uid, dial in dials.items():
+            # A dial without status is unreachable; it is retried on the next poll.
+            if status := dial["detailed_status"]:
+                await self._update_binding(dial_uid, self._config_manager.get_dial_config(dial_uid), status)
 
-    async def _update_binding(self, dial_uid: str, config: dict[str, Any]) -> None:
-        """Update binding for a specific dial."""
+    async def _update_binding(
+        self, dial_uid: str, config: dict[str, Any], status: dict[str, Any] | None = None
+    ) -> None:
+        """Update binding for a specific dial and apply the bound entity's current state.
+
+        ``status`` is the dial's polled status when coordinator data is not yet updated.
+        """
         bound_entity = config.get(CONF_BOUND_ENTITY)
         update_mode = config.get(CONF_UPDATE_MODE)
 
@@ -81,20 +88,17 @@ class VU1SensorBindingManager:
             # Check if the bound entity has changed - if so, recreate the binding
             if existing_binding.get("entity_id") != bound_entity:
                 await self._remove_binding(dial_uid)
-                await self._create_binding(dial_uid, bound_entity, config)
+                await self._create_binding(dial_uid, bound_entity, config, status)
             else:
-                # Same entity - re-apply only when the mapping changed.
-                old_config = existing_binding["config"]
                 existing_binding["config"] = config.copy()
-                if any(old_config.get(key) != config.get(key) for key in BINDING_KEYS):
-                    current_state = self.hass.states.get(bound_entity)
-                    if current_state:
-                        await self._apply_sensor_value_from_state(dial_uid, current_state)
+                if current_state := self.hass.states.get(bound_entity):
+                    await self._apply_sensor_value_from_state(dial_uid, current_state, status)
         else:
-            # No binding exists for this dial - create one
-            await self._create_binding(dial_uid, bound_entity, config)
+            await self._create_binding(dial_uid, bound_entity, config, status)
 
-    async def _create_binding(self, dial_uid: str, entity_id: str, config: dict[str, Any]) -> None:
+    async def _create_binding(
+        self, dial_uid: str, entity_id: str, config: dict[str, Any], status: dict[str, Any] | None = None
+    ) -> None:
         """Create a new sensor binding."""
         # Validate entity exists
         entity_registry = er.async_get(self.hass)
@@ -149,7 +153,7 @@ class VU1SensorBindingManager:
         # Apply initial state immediately (bypass debouncer for first update)
         initial_state = self.hass.states.get(entity_id)
         if initial_state:
-            await self._apply_sensor_value_from_state(dial_uid, initial_state)
+            await self._apply_sensor_value_from_state(dial_uid, initial_state, status)
 
     async def _remove_binding(self, dial_uid: str) -> None:
         """Remove a sensor binding."""
@@ -209,8 +213,14 @@ class VU1SensorBindingManager:
             
         await self._apply_sensor_value_from_state(dial_uid, binding_info["last_state"])
 
-    async def _apply_sensor_value_from_state(self, dial_uid: str, state: State) -> None:
-        """Core logic for applying a sensor value to a dial."""
+    async def _apply_sensor_value_from_state(
+        self, dial_uid: str, state: State, status: dict[str, Any] | None = None
+    ) -> None:
+        """Send the mapped state to the dial unless the server reports that value as delivered.
+
+        A polled ``status`` means a per-poll reconcile, which compares only the value: re-sending a
+        pending or unresponsive value resets the server's retry backoff and unresponsive latch.
+        """
         binding_info = self._bindings.get(dial_uid)
         if not binding_info:
             return
@@ -229,13 +239,20 @@ class VU1SensorBindingManager:
 
             # Map sensor range to dial 0-100% range
             dial_value = self._map_value_to_dial(sensor_value, config)
-            status = coordinator.data["dials"][dial_uid]["detailed_status"]
-            if status.get("value") == dial_value:
+            reconcile = status is not None
+            if status is None:
+                status = coordinator.data["dials"][dial_uid]["detailed_status"]
+            if status.get("value") == dial_value and (
+                reconcile or not (status.get("value_changed") or status.get("value_unresponsive"))
+            ):
                 return
 
             await client.set_dial_value(dial_uid, dial_value)
-            status["value"] = dial_value
-            coordinator.async_update_listeners()
+            # The server now holds the value, so later sends of it are skipped until the next poll.
+            status.update(value=dial_value, value_changed=False, value_unresponsive=False)
+            # A reconcile runs inside the poll, which publishes the new data itself.
+            if not reconcile:
+                coordinator.async_update_listeners()
 
             _LOGGER.debug(
                 "Applied sensor value %s -> dial %s (value: %s)",

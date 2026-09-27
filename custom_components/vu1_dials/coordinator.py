@@ -6,7 +6,7 @@ import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
@@ -27,7 +27,39 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["VU1DataUpdateCoordinator", "_get_dial_client_and_coordinator"]
+__all__ = [
+    "VU1DataUpdateCoordinator",
+    "_get_dial_client_and_coordinator",
+    "dial_server_name",
+    "image_basename",
+    "server_version",
+]
+
+BLANK_IMAGE_CRC = "00000000"
+
+# (server easing key, dial config key, server database default)
+SERVER_EASING_FIELDS: tuple[tuple[str, str, int], ...] = (
+    ("dial_period", "dial_easing_period", 50),
+    ("dial_step", "dial_easing_step", 2),
+    ("backlight_period", "backlight_easing_period", 100),
+    ("backlight_step", "backlight_easing_step", 5),
+)
+
+
+def dial_server_name(dial: dict[str, Any]) -> str | None:
+    """Return the server's dial name, or None for an empty name or the server's "Not set" placeholder."""
+    name = (dial.get("dial_name") or "").strip()
+    return name if name and name.casefold() != "not set" else None
+
+
+def server_version(value: Any) -> str | None:
+    """Return a version or hash string, or None for an empty value or the server's "?" placeholder."""
+    return value if value and value != "?" else None
+
+
+def image_basename(image_file: str | None) -> str | None:
+    """Return the file name of a server image path, which may be absolute."""
+    return image_file.replace("\\", "/").rsplit("/", 1)[-1] if image_file else None
 
 
 class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -53,16 +85,18 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             always_update=False,
         )
         self.client = client
-        # Track last known names to detect server-side changes
+        # Last known server name per dial, so an HA rename that matches it is not re-sent
         self._previous_dial_names: dict[str, str] = {}
         # Prevent sync loops when name changes originate from HA
         self._name_change_grace_periods: dict[str, Any] = {}
         self._behavior_change_grace_periods: dict[str, Any] = {}
         self._grace_period_seconds = 10
-        # Hub device identifier, used for via_device relationships
+        # Identifier of the hub device in the device registry
         self.server_device_identifier = f"vu1_server_{config_entry.entry_id}"
         # Dials whose status fetch is failing, so the failure is logged once
         self._failed_dials: set[str] = set()
+        # Dials with an open dial_unresponsive repair issue
+        self._unresponsive_dials: set[str] = set()
 
     def _prune_expired_grace_periods(self) -> None:
         """Remove expired entries from grace period dicts to prevent unbounded growth."""
@@ -84,7 +118,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             dials = [dial for dial in dials if isinstance(dial, dict) and "uid" in dial]
             results = await asyncio.gather(
                 *(self.client.get_dial_status(dial["uid"]) for dial in dials),
-                *(self.client.get_dial_image_crc(dial["uid"]) for dial in dials),
+                *(self._async_get_image_crc(dial) for dial in dials),
                 return_exceptions=True,
             )
 
@@ -106,9 +140,13 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 dial_data[dial_uid] = {**dial, "detailed_status": status, "image_crc": image_crc}
 
                 if status:
+                    self._update_unresponsive_issue(dial_uid, dial, status)
                     self._sync_device_registry(dial_uid, dial, status)
                     await self._check_server_behavior_change(dial_uid, status)
                     await self._async_restore_backlight(dial_uid, status)
+
+            for dial_uid in self._unresponsive_dials - dial_data.keys():
+                self._delete_unresponsive_issue(dial_uid)
 
             if dial_data:
                 ir.async_delete_issue(self.hass, DOMAIN, "no_dials")
@@ -127,11 +165,51 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except VU1APIError as err:
             raise UpdateFailed(str(err)) from err
 
+    async def _async_get_image_crc(self, dial: dict[str, Any]) -> str | None:
+        """Return the dial's image CRC; the server logs an error for each CRC request on a blank dial."""
+        if image_basename(dial.get("image_file")) == "img_blank":
+            return BLANK_IMAGE_CRC
+        return await self.client.get_dial_image_crc(dial["uid"])
+
+    def _update_unresponsive_issue(self, dial_uid: str, dial: dict[str, Any], status: dict[str, Any]) -> None:
+        """Open or close the repair issue for a dial the server stopped retrying."""
+        if not (status.get("value_unresponsive") or status.get("backlight_unresponsive")):
+            self._delete_unresponsive_issue(dial_uid)
+            return
+        self._unresponsive_dials.add(dial_uid)
+        ir.async_create_issue(
+            self.hass, DOMAIN, f"dial_unresponsive_{dial_uid}",
+            is_fixable=False, severity=ir.IssueSeverity.WARNING, translation_key="dial_unresponsive",
+            translation_placeholders={"dial_name": self._dial_display_name(dial_uid, dial)},
+        )
+
+    def _dial_display_name(self, dial_uid: str, dial: dict[str, Any]) -> str:
+        """Return the dial's HA device name, else its server name, else ``VU1 Dial <uid>``."""
+        device = dr.async_get(self.hass).async_get_device_by_identifier(
+            (DOMAIN, dial_uid), self.config_entry.entry_id
+        )
+        return (
+            (device and (device.name_by_user or device.name))
+            or dial_server_name(dial)
+            or f"VU1 Dial {dial_uid}"
+        )
+
+    def _delete_unresponsive_issue(self, dial_uid: str) -> None:
+        """Close the dial_unresponsive repair issue for a dial."""
+        self._unresponsive_dials.discard(dial_uid)
+        ir.async_delete_issue(self.hass, DOMAIN, f"dial_unresponsive_{dial_uid}")
+
+    @callback
+    def async_clear_issues(self) -> None:
+        """Close every per-dial repair issue this coordinator opened; call on unload."""
+        for dial_uid in list(self._unresponsive_dials):
+            self._delete_unresponsive_issue(dial_uid)
+
     def _sync_device_registry(
         self, dial_uid: str, dial: dict[str, Any], status: dict[str, Any]
     ) -> None:
         """Sync the server-side name and firmware/hardware versions to the device registry."""
-        server_name = dial.get("dial_name")
+        server_name = dial_server_name(dial)
         # Ignore server names during a grace period (change originated from HA)
         grace_end = self._name_change_grace_periods.get(dial_uid)
         if grace_end and dt_util.utcnow() < grace_end:
@@ -146,8 +224,8 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         changes = {
             "name": None if device.name_by_user else server_name,
-            "sw_version": status.get("fw_version"),
-            "hw_version": status.get("hw_version"),
+            "sw_version": server_version(status.get("fw_version")),
+            "hw_version": server_version(status.get("hw_version")),
         }
         changes = {key: value for key, value in changes.items() if value and getattr(device, key) != value}
         if changes:
@@ -156,13 +234,11 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_restore_backlight(self, dial_uid: str, status: dict[str, Any]) -> None:
         """Re-apply the stored backlight when the server reports it reset to off.
 
-        The VU1 server does not persist backlight across its own restarts. It also
-        strips white from its reports, so a white-only stored colour cannot be told
-        apart from a reset and is not restored.
+        The VU1 server does not persist backlight across restarts or provisioning.
         """
         backlight = status.get("backlight")
         color = async_get_config_manager(self.hass).get_dial_config(dial_uid)[CONF_BACKLIGHT_COLOR]
-        if not backlight or any(backlight.values()) or not any(color[:3]):
+        if not backlight or any(backlight.values()) or not any(color):
             return
         try:
             await self.client.set_dial_backlight(dial_uid, *color)
@@ -277,35 +353,27 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not easing_config:
             return
 
+        server_values: dict[str, int] = {}
+        for server_key, config_key, default in SERVER_EASING_FIELDS:
+            try:
+                server_values[config_key] = int(easing_config.get(server_key, default))
+            except (ValueError, TypeError):
+                server_values[config_key] = default
         config_manager = async_get_config_manager(self.hass)
         current_config = config_manager.get_dial_config(dial_uid)
-        # Convert server values to int with fallbacks for invalid data
-        try:
-            dial_period = int(easing_config.get("dial_period", 50))
-        except (ValueError, TypeError):
-            dial_period = 50
 
-        try:
-            backlight_period = int(easing_config.get("backlight_period", 50))
-        except (ValueError, TypeError):
-            backlight_period = 50
-
-        try:
-            dial_step = int(easing_config.get("dial_step", 5))
-        except (ValueError, TypeError):
-            dial_step = 5
-
-        try:
-            backlight_step = int(easing_config.get("backlight_step", 5))
-        except (ValueError, TypeError):
-            backlight_step = 5
-
-        server_values = {
-            "dial_easing_period": dial_period,
-            "dial_easing_step": dial_step,
-            "backlight_easing_period": backlight_period,
-            "backlight_easing_step": backlight_step,
-        }
+        # A /reload whose hardware read failed persists zero easing, which the server sends to the dial on its next start.
+        if not all(server_values.values()):
+            try:
+                await self.client.set_dial_easing(
+                    dial_uid, current_config["dial_easing_period"], current_config["dial_easing_step"]
+                )
+                await self.client.set_backlight_easing(
+                    dial_uid, current_config["backlight_easing_period"], current_config["backlight_easing_step"]
+                )
+            except VU1APIError as err:
+                _LOGGER.debug("Failed to restore easing for dial %s: %s", dial_uid, err)
+            return
 
         config_changed = False
         for key, server_value in server_values.items():

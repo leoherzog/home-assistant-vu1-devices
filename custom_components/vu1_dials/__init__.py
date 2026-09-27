@@ -173,6 +173,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool:
 
     # The first refresh ran before runtime_data existed, so bindings could not reach the client yet.
     await binding_manager.async_update_bindings(coordinator.data)
+    # A reconcile writes into coordinator data in place and leaves publishing to the caller.
+    coordinator.async_update_listeners()
 
     return True
 
@@ -185,6 +187,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool
         ir.async_delete_issue(hass, DOMAIN, "no_dials")
         runtime_data = entry.runtime_data
         coordinator = runtime_data.coordinator
+        coordinator.async_clear_issues()
         if coordinator.data:
             for dial_uid in list(coordinator.data.get("dials", {}).keys()):
                 await runtime_data.binding_manager.async_remove_binding(dial_uid)
@@ -277,9 +280,8 @@ async def _execute_dial_service_for_all(
     dial_uids: list[str],
     action_name: str,
     api_call: Callable[[VU1DataUpdateCoordinator, str], Awaitable[None]],
-    refresh: bool = True,
 ) -> None:
-    """Run ``api_call(coordinator, uid)`` for every dial concurrently, then refresh once if ``refresh``.
+    """Run ``api_call(coordinator, uid)`` for every dial concurrently, then refresh once if any call succeeded.
 
     Raises a single error listing which dials failed.
     """
@@ -292,7 +294,7 @@ async def _execute_dial_service_for_all(
 
     results = await asyncio.gather(*(run(uid) for uid in dial_uids), return_exceptions=True)
     errors = {uid: result for uid, result in zip(dial_uids, results) if isinstance(result, Exception)}
-    if refresh and (coordinator := next((r for r in results if isinstance(r, VU1DataUpdateCoordinator)), None)):
+    if (coordinator := next((r for r in results if isinstance(r, VU1DataUpdateCoordinator)), None)):
         await coordinator.async_request_refresh()
 
     if errors:
@@ -337,7 +339,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         await _execute_dial_service_for_all(
             hass, dial_uids, "set dial backlight",
             lambda coordinator, uid: coordinator.async_set_backlight(uid, red, green, blue, white),
-            refresh=False,
         )
 
     async def set_dial_name(call: ServiceCall) -> None:

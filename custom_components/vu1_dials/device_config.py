@@ -77,9 +77,9 @@ class VU1DialConfigManager:
     async def async_remove_dial_config(self, dial_uid: str) -> None:
         """Remove stored configuration for a dial.
 
-        Safe to call even when the dial has no stored config (no-op). Intended
-        for use from ``async_remove_config_entry_device`` so a removed dial
-        doesn't leave orphaned persisted configuration behind.
+        Safe to call when the dial has no stored config. Always drops the dial's
+        listeners. Intended for use from ``async_remove_config_entry_device`` so
+        a removed dial doesn't leave orphaned persisted configuration behind.
         """
         if self._configs.pop(dial_uid, None) is not None:
             self._async_schedule_save()
@@ -99,8 +99,8 @@ class VU1DialConfigManager:
             CONF_BACKLIGHT_COLOR: list(DEFAULT_BACKLIGHT_COLOR),
             CONF_UPDATE_MODE: DEFAULT_UPDATE_MODE,
             "dial_easing_period": 50,
-            "dial_easing_step": 5,
-            "backlight_easing_period": 50,
+            "dial_easing_step": 2,
+            "backlight_easing_period": 100,
             "backlight_easing_step": 5,
         }
 

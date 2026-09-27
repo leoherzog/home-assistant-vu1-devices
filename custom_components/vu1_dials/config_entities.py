@@ -59,7 +59,7 @@ class VU1ConfigEntityBase(VU1DialEntity):
         self._config_manager.async_remove_listener(self._dial_uid, self._on_config_change)
 
     async def _on_config_change(self, dial_uid: str, config: dict[str, Any]) -> None:
-        """Handle configuration changes from external sources."""
+        """Write state when this dial's stored config changes."""
         self.async_write_ha_state()
 
     async def _update_config(self, **config_updates) -> None:

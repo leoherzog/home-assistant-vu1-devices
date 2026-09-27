@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import BACKLIGHT_CHANNELS, CONF_BACKLIGHT_COLOR, DOMAIN, MANUFACTURER, MODEL
-from .coordinator import VU1DataUpdateCoordinator
+from .coordinator import VU1DataUpdateCoordinator, dial_server_name, server_version
 from .device_config import async_get_config_manager
 
 if TYPE_CHECKING:
@@ -24,11 +24,11 @@ def get_dial_device_info(coordinator: VU1DataUpdateCoordinator, dial_uid: str) -
     status = dial.get("detailed_status") or {}
     return DeviceInfo(
         identifiers={(DOMAIN, dial_uid)},
-        name=dial.get("dial_name", f"VU1 Dial {dial_uid}"),
+        name=dial_server_name(dial) or f"VU1 Dial {dial_uid}",
         manufacturer=MANUFACTURER,
         model=MODEL,
-        sw_version=status.get("fw_version"),
-        hw_version=status.get("hw_version"),
+        sw_version=server_version(status.get("fw_version")),
+        hw_version=server_version(status.get("hw_version")),
         serial_number=dial_uid,
         via_device_id=coordinator.hub_device_id,
     )
@@ -59,8 +59,7 @@ class VU1DialEntity(CoordinatorEntity[VU1DataUpdateCoordinator]):
         """Return the current RGBW backlight in the device's 0-100 range."""
         dial = self.dial_data
         backlight = dial.get("detailed_status", {}).get("backlight") or dial.get("backlight") or {}
-        # The server strips white from /dial/list (and with it from /status), so
-        # a missing channel falls back to the last colour HA set.
+        # /dial/list omits white; a missing channel falls back to the last colour HA set.
         stored = async_get_config_manager(self.hass).get_dial_config(self._dial_uid)[CONF_BACKLIGHT_COLOR]
         return [backlight.get(channel, value) for channel, value in zip(BACKLIGHT_CHANNELS, stored)]
 

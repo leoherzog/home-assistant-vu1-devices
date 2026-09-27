@@ -18,6 +18,7 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
+from .coordinator import dial_server_name
 from .device_config import async_get_config_manager
 from .sensor_binding import async_get_binding_manager
 from .vu1_api import (
@@ -176,9 +177,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
     """Handle options flow.
 
-    Subclasses OptionsFlowWithReload so saved options (update_interval, timeout)
-    take effect immediately — the base class reloads the entry on save, which
-    re-creates the coordinator/client with the new values.
+    Subclasses OptionsFlowWithReload so a change to update_interval or timeout
+    reloads the entry, which rebuilds the client and coordinator. A save with
+    unchanged options does not reload.
     """
 
     def __init__(self) -> None:
@@ -200,10 +201,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 for dial_uid, dial_data in dials_data.items():
                     # Prefer device registry name (respects name_by_user) over server name
                     device = device_registry.async_get_device_by_identifier((DOMAIN, dial_uid), self.config_entry.entry_id)
-                    if device:
-                        dial_name = device.name_by_user or device.name or dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
-                    else:
-                        dial_name = dial_data.get("dial_name", f"VU1 Dial {dial_uid}")
+                    dial_name = (device and (device.name_by_user or device.name)) or dial_server_name(dial_data) or f"VU1 Dial {dial_uid}"
                     self._dials.append({
                         "value": dial_uid,
                         "label": f"{dial_name} ({dial_uid})",
@@ -256,7 +254,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
         dial = self.config_entry.runtime_data.coordinator.data["dials"].get(
             self._selected_dial, {}
         )
-        return {"dial_name": dial.get("dial_name", self._selected_dial)}
+        return {"dial_name": dial_server_name(dial) or self._selected_dial}
 
     async def async_step_configure_dial(
         self, user_input: dict[str, Any] | None = None

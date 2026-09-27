@@ -10,6 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from .coordinator import image_basename
 from .entity import VU1DialEntity, async_setup_dial_entities
 
 if TYPE_CHECKING:
@@ -86,13 +87,8 @@ class VU1DialBackgroundImage(VU1DialEntity, ImageEntity):
         """Return state attributes."""
         attributes = super().extra_state_attributes or {}
 
-        # Add image file information
-        image_file = self._get_current_image_file()
-        if image_file:
-            # Extract just the filename for display
-            filename = image_file.replace("\\", "/").split("/")[-1]
+        if filename := image_basename(self._get_current_image_file()):
             attributes["image_filename"] = filename
-            attributes["image_file_path"] = image_file
 
         # Add image change status
         detailed_status = self.dial_data.get("detailed_status", {})
@@ -100,7 +96,7 @@ class VU1DialBackgroundImage(VU1DialEntity, ImageEntity):
             attributes["image_changed"] = detailed_status["image_changed"]
 
         # Add technical specifications
-        attributes["display_resolution"] = "144 x 200 pixels"
+        attributes["display_resolution"] = "200 x 144 pixels"
         attributes["supported_formats"] = "PNG, JPG, JPEG"
 
         return attributes

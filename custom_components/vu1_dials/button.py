@@ -13,7 +13,8 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import CONF_UPDATE_MODE, DOMAIN, UPDATE_MODE_MANUAL
+from .device_config import async_get_config_manager
 from .entity import VU1DialEntity, async_setup_dial_entities
 
 if TYPE_CHECKING:
@@ -68,12 +69,35 @@ class VU1ProvisionDialsButton(CoordinatorEntity["VU1DataUpdateCoordinator"], But
         )
 
     async def async_press(self) -> None:
-        """Handle the button press."""
+        """Provision new dials, then restore manual dial values the server reset."""
+        coordinator = self.coordinator
+        previous = {uid: dial["detailed_status"].get("value") for uid, dial in coordinator.data["dials"].items()}
         _LOGGER.info("Provisioning new dials via VU1 server")
-        await self.coordinator.client.provision_new_dials()
+        await coordinator.client.provision_new_dials()
         # Await an immediate refresh (not the debounced async_request_refresh).
         # Each platform's coordinator listener adds entities for new dials.
-        await self.coordinator.async_refresh()
+        await coordinator.async_refresh()
+
+        # The refresh above already reconciled automatic dials, except a bound value of 0,
+        # which the server's reset reports as delivered.
+        config_manager = async_get_config_manager(self.hass)
+        for uid, dial in coordinator.data["dials"].items():
+            status = dial["detailed_status"]
+            value = previous.get(uid)
+            if (
+                value is None
+                or not status
+                or status.get("value") == value
+                or config_manager.get_dial_config(uid)[CONF_UPDATE_MODE] != UPDATE_MODE_MANUAL
+            ):
+                continue
+            try:
+                await coordinator.client.set_dial_value(uid, value)
+            except HomeAssistantError as err:
+                _LOGGER.warning("Failed to restore value for dial %s: %s", uid, err)
+                continue
+            status["value"] = value
+        coordinator.async_update_listeners()
 
 
 class VU1RefreshHardwareInfoButton(VU1DialEntity, ButtonEntity):
