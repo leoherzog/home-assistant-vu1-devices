@@ -6,7 +6,7 @@ A Home Assistant integration for [Streacom VU1](https://streacom.com/products/vu
 
 ## Features
 
-- **Add-on or manual setup** - the VU1 Server add-on is offered when installed; otherwise enter host, port and key
+- **App or manual setup** - the VU1 Server app is offered when installed; otherwise enter host, port and key
 - **Entity binding** - drive a dial from a sensor, input_number, number or counter, mapped from a range you choose to 0-100%
 - **Name sync** between Home Assistant and the VU1 Server (see [Known limitations](#known-limitations))
 - **RGBW backlight** as a light entity
@@ -17,7 +17,7 @@ A Home Assistant integration for [Streacom VU1](https://streacom.com/products/vu
 ## Requirements
 
 - Home Assistant 2026.8.0 or newer
-- A VU1 Server (add-on or standalone) reachable from Home Assistant. A standalone server binds to `hostname:` in its `config.yaml`, which ships as `localhost`; set it empty (all interfaces) or to a LAN address.
+- A VU1 Server (app or standalone) reachable from Home Assistant. A standalone server binds to `hostname:` in its `config.yaml`, which ships as `localhost`; set it empty (all interfaces) or to a LAN address.
 - The server's master key or an API key
 
 ## Installation
@@ -39,17 +39,17 @@ A Home Assistant integration for [Streacom VU1](https://streacom.com/products/vu
 
 1. Go to **Settings** → **Devices & services** → **Add integration** and search for "Streacom VU1 Dials"
 2. Choose a connection method:
-   - **VU1 Server add-on** - offered when the add-on is installed. Host and port are filled in; you only enter the key.
+   - **VU1 Server app** - offered when the app is installed. Host and port are filled in; you only enter the key.
    - **Manual** - enter host, port (default 5340) and key. A standalone server must not be bound to `localhost` (see [Requirements](#requirements)).
 
 One VU1 Server can be added per Home Assistant instance.
 
 ### Where to get the key
 
-1. Open the VU1 Server Web UI (**Open Web UI** on the add-on page, or browse to the server).
+1. Open the VU1 Server Web UI (**Open Web UI** on the app page, or browse to the server).
 2. Either use the **master key**, or create a key under **API Keys** in the Web UI's top bar. An API key only sees the dials granted to it; grants can be edited later under **API Keys**, and newly added dials must be granted. Provisioning new dials needs the master key.
 
-The add-on uses VU-Server's default master key, and the Web UI has it built in. The server prints it on every start (`Provide '<key>' to your main application.`, at the default `info` log level), so restart the add-on and read its log if you need it. Because the default key is public, anything that can reach port 5340 has admin access to the server.
+The app uses VU-Server's default master key, and the Web UI has it built in. The server prints it on every start (`Provide '<key>' to your main application.`, at the default `info` log level), so restart the app and read its log if you need it. Because the default key is public, anything that can reach port 5340 has admin access to the server.
 
 If the key is later rejected, Home Assistant asks for a new one (re-authentication). To change host, port or key, use **Reconfigure** on the integration.
 

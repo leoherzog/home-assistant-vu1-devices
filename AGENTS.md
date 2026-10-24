@@ -11,7 +11,7 @@ Home Assistant custom integration `vu1_dials` (hub, `local_polling`, config entr
 ```
 custom_components/vu1_dials/
 ├── __init__.py          # Setup/unload/remove, runtime_data, services, device-registry rename listener
-├── config_flow.py       # Config flow (add-on / manual), reconfigure, reauth, options flow
+├── config_flow.py       # Config flow (app / manual), reconfigure, reauth, options flow
 ├── coordinator.py       # VU1DataUpdateCoordinator, name/easing/hardware sync, backlight write path
 ├── entity.py            # VU1DialEntity base, get_dial_device_info, async_setup_dial_entities
 ├── vu1_api.py           # VU1APIClient, exception hierarchy, discover_vu1_addon
@@ -58,7 +58,7 @@ provision_new_dials()                            # admin_key; VU1AuthError -> pr
 
 Errors: `VU1APIError(HomeAssistantError)` carries translation keys, so entity actions and `set_dial_name` let it propagate unwrapped; the other services collect per-dial errors into one `action_failed` error. Subclasses: `VU1AuthError` (401, `invalid_auth`), `VU1InvalidNameError` and `VU1InvalidImageError` (both also `ServiceValidationError`). Everything else is a plain `VU1APIError` whose translation key tells the cases apart: `cannot_connect` (aiohttp error/timeout), `dial_offline` (503/406, or a 2xx with `status:"fail"` and the offline message), `dial_access_denied` (403, key not granted the dial), `not_vu1_server` (body is not a JSON object), `dial_not_found` (`reload_dial` got `data:false`), `api_error`.
 
-`discover_vu1_addon(session)`: with `SUPERVISOR_TOKEN`, lists Supervisor add-ons, picks a slug containing `vu-server-addon` and returns `{host: slug with _ -> -, port: 5340, running}`, else `{}`.
+`discover_vu1_addon(session)`: with `SUPERVISOR_TOKEN`, lists Supervisor apps, picks a slug containing `vu-server-addon` and returns `{host: slug with _ -> -, port: 5340, running}`, else `{}`.
 
 ## Coordinator (`coordinator.py`)
 
@@ -156,7 +156,7 @@ Adding a service: add `SERVICE_*`/`ATTR_*` to `const.py`; write a handler that c
 ## Config flow (`config_flow.py`)
 
 - `user`: runs `discover_vu1_addon`; shows a menu (`addon`, `manual`) when found, otherwise goes to `manual`.
-- `addon`: aborts `addon_not_running` if the add-on is stopped; asks only for the key.
+- `addon`: aborts `addon_not_running` if the app is stopped; asks only for the key.
 - `manual`: host, port, key.
 - `reconfigure`: host, port, optional key (empty keeps the current one).
 - `reauth` / `reauth_confirm`: new key.
@@ -187,7 +187,7 @@ Base `http://{host}:{port}/api/v0`, default port 5340. Responses are `{"status":
 | GET | `/dial/{uid}/reload` | `key` | `data: false` for an unknown dial |
 | GET | `/dial/provision` | `admin_key` | Privilege level >= 99; the Web UI creates only level-1 keys, so in practice the master key |
 
-Every `/dial/{uid}/...` endpoint returns 401 without a valid key and 403 when the key is not granted that dial. A key sees only the dials granted to it under API Keys in the Web UI's top bar; grants can be edited later and newly added dials must be granted. The server persists names and easing but not backlight. `value` is the last commanded value, not a hardware readback. The add-on uses VU-Server's public default master key, built into the Web UI; the server prints it on every start (`Provide '<key>' to your main application.`, info level).
+Every `/dial/{uid}/...` endpoint returns 401 without a valid key and 403 when the key is not granted that dial. A key sees only the dials granted to it under API Keys in the Web UI's top bar; grants can be edited later and newly added dials must be granted. The server persists names and easing but not backlight. `value` is the last commanded value, not a hardware readback. The app uses VU-Server's public default master key, built into the Web UI; the server prints it on every start (`Provide '<key>' to your main application.`, info level).
 
 ## Working on this repo
 

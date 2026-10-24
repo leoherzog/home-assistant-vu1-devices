@@ -5,7 +5,7 @@
         "title": "Connect to VU1 Server",
         "description": "Select how to connect to your VU1 Server.",
         "menu_options": {
-          "addon": "VU1 Server add-on",
+          "addon": "VU1 Server app",
           "manual": "Enter connection details manually"
         }
       },
@@ -24,8 +24,8 @@
         }
       },
       "addon": {
-        "title": "VU1 Server Add-on",
-        "description": "Enter the master key of the VU1 Server add-on. It is printed in the add-on log on every start (restart the add-on if you missed it). A key created under API Keys in the add-on Web UI's top bar sees only the dials granted to it and cannot provision new dials.",
+        "title": "VU1 Server App",
+        "description": "Enter the master key of the VU1 Server app. It is printed in the app log on every start (restart the app if you missed it). A key created under API Keys in the app Web UI's top bar sees only the dials granted to it and cannot provision new dials.",
         "data": {
           "api_key": "API Key"
         },
@@ -64,7 +64,7 @@
       "unknown": "Unexpected error occurred"
     },
     "abort": {
-      "addon_not_running": "The VU1 Server add-on is not running. Start it and try again.",
+      "addon_not_running": "The VU1 Server app is not running. Start it and try again.",
       "reauth_successful": "Re-authentication was successful",
       "reconfigure_successful": "VU1 Server settings updated successfully"
     }

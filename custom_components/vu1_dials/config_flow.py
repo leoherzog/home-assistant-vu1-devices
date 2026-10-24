@@ -51,7 +51,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Offer the VU1 Server add-on when installed, else go to manual setup."""
+        """Offer the VU1 Server app when installed, else go to manual setup."""
         self._addon = await discover_vu1_addon(async_get_clientsession(self.hass))
         if not self._addon:
             return await self.async_step_manual()
@@ -86,7 +86,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_addon(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle add-on configuration."""
+        """Handle app configuration."""
         if not self._addon["running"]:
             return self.async_abort(reason="addon_not_running")
 
@@ -100,7 +100,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
             errors = await validate_input(self.hass, data)
             if not errors:
-                return self.async_create_entry(title="VU1 Server (Add-on)", data=data)
+                return self.async_create_entry(title="VU1 Server (App)", data=data)
 
         return self.async_show_form(
             step_id="addon",

@@ -248,9 +248,9 @@ def _fit_to_display(image_data: bytes) -> bytes:
 
 
 async def discover_vu1_addon(session: aiohttp.ClientSession) -> dict[str, Any]:
-    """Discover the VU1 Server add-on via the Supervisor API.
+    """Discover the VU1 Server app via the Supervisor API.
 
-    Returns ``{}`` when not on Supervisor or the add-on is not installed.
+    Returns ``{}`` when not on Supervisor or the app is not installed.
     """
     token = os.environ.get("SUPERVISOR_TOKEN")
     if not token:
@@ -266,14 +266,14 @@ async def discover_vu1_addon(session: aiohttp.ClientSession) -> dict[str, Any]:
             addons = (await response.json())["data"]["addons"]
         matches = [addon for addon in addons if "vu-server-addon" in addon["slug"]]
     except (ClientError, TimeoutError, ValueError, LookupError, TypeError) as err:
-        _LOGGER.debug("Could not list add-ons from Supervisor: %s", err)
+        _LOGGER.debug("Could not list apps from Supervisor: %s", err)
         return {}
 
     if not matches:
         return {}
     running = ("started", "startup")
     addon = next((a for a in matches if a.get("state") in running), matches[0])
-    # Supervisor derives an add-on's DNS hostname from its slug.
+    # Supervisor derives an app's DNS hostname from its slug.
     return {
         "host": addon["slug"].replace("_", "-"),
         "port": DEFAULT_PORT,
