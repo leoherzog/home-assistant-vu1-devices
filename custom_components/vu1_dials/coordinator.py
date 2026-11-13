@@ -97,6 +97,8 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._failed_dials: set[str] = set()
         # Dials with an open dial_unresponsive repair issue
         self._unresponsive_dials: set[str] = set()
+        # Status fields commanded since the last poll started, per dial
+        self._commanded: dict[str, dict[str, Any]] = {}
 
     def _prune_expired_grace_periods(self) -> None:
         """Remove expired entries from grace period dicts to prevent unbounded growth."""
@@ -109,6 +111,7 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from VU1 server."""
         self._prune_expired_grace_periods()
+        self._commanded = {}
         try:
             dials = await self.client.get_dial_list()
 
@@ -157,6 +160,11 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
             await self.hass.data[DATA_BINDING_MANAGER].async_update_bindings({"dials": dial_data})
+
+            # A command sent while this poll ran is newer than the status it fetched.
+            for dial_uid, fields in self._commanded.items():
+                if dial_uid in dial_data:
+                    dial_data[dial_uid]["detailed_status"].update(fields)
 
             return {"dials": dial_data}
 
@@ -260,8 +268,19 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.client.set_dial_backlight(dial_uid, red, green, blue, white)
         color = [red, green, blue, white]
         await config_manager.async_update_dial_config(dial_uid, {CONF_BACKLIGHT_COLOR: color})
+        self._async_publish(dial_uid, backlight=dict(zip(BACKLIGHT_CHANNELS, color)))
+
+    async def async_set_dial_value(self, dial_uid: str, value: int) -> None:
+        """Set a dial's value and publish it optimistically."""
+        await self.client.set_dial_value(dial_uid, value)
+        self._async_publish(dial_uid, value=value)
+
+    @callback
+    def _async_publish(self, dial_uid: str, **fields: Any) -> None:
+        """Write commanded status fields into coordinator data, keeping them over a poll in flight."""
+        self._commanded.setdefault(dial_uid, {}).update(fields)
         if dial := self.data["dials"].get(dial_uid):
-            dial["detailed_status"]["backlight"] = dict(zip(BACKLIGHT_CHANNELS, color))
+            dial["detailed_status"].update(fields)
             self.async_update_listeners()
 
     def mark_name_change_from_ha(self, dial_uid: str) -> None:

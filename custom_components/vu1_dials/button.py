@@ -92,12 +92,9 @@ class VU1ProvisionDialsButton(CoordinatorEntity["VU1DataUpdateCoordinator"], But
             ):
                 continue
             try:
-                await coordinator.client.set_dial_value(uid, value)
+                await coordinator.async_set_dial_value(uid, value)
             except HomeAssistantError as err:
                 _LOGGER.warning("Failed to restore value for dial %s: %s", uid, err)
-                continue
-            status["value"] = value
-        coordinator.async_update_listeners()
 
 
 class VU1RefreshHardwareInfoButton(VU1DialEntity, ButtonEntity):

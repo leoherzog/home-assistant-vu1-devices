@@ -71,11 +71,7 @@ class VU1DialNumber(VU1DialEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Set the dial value."""
         await async_switch_to_manual(self.hass, self._dial_uid)
-        await self.coordinator.client.set_dial_value(self._dial_uid, int(value))
-
-        if dial := self.coordinator.data["dials"].get(self._dial_uid):
-            dial["detailed_status"]["value"] = int(value)
-            self.coordinator.async_update_listeners()
+        await self.coordinator.async_set_dial_value(self._dial_uid, int(value))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

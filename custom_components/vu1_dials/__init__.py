@@ -325,7 +325,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
         async def set_value(coordinator: VU1DataUpdateCoordinator, uid: str) -> None:
             await async_switch_to_manual(hass, uid)
-            await coordinator.client.set_dial_value(uid, value)
+            await coordinator.async_set_dial_value(uid, value)
 
         await _execute_dial_service_for_all(hass, dial_uids, "set dial value", set_value)
 
