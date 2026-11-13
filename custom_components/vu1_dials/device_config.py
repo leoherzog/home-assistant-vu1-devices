@@ -9,6 +9,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_BACKLIGHT_COLOR,
+    CONF_BACKLIGHT_LAST_COLOR,
     CONF_BOUND_ENTITY,
     CONF_UPDATE_MODE,
     CONF_VALUE_MAX,
@@ -30,6 +31,7 @@ __all__ = ["VU1DialConfigManager", "async_get_config_manager"]
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}_dial_configs"
 SAVE_DELAY = 10
+COLOR_KEYS = (CONF_BACKLIGHT_COLOR, CONF_BACKLIGHT_LAST_COLOR)
 
 
 class VU1DialConfigManager:
@@ -62,7 +64,7 @@ class VU1DialConfigManager:
     def get_dial_config(self, dial_uid: str) -> dict[str, Any]:
         """Get a copy of the configuration for a dial."""
         config = self._configs.get(dial_uid) or self._get_default_config()
-        return {**config, CONF_BACKLIGHT_COLOR: list(config[CONF_BACKLIGHT_COLOR])}
+        return {**config, **{key: list(config[key]) for key in COLOR_KEYS}}
 
     async def async_update_dial_config(
         self, dial_uid: str, config: dict[str, Any]
@@ -97,6 +99,7 @@ class VU1DialConfigManager:
             CONF_VALUE_MIN: DEFAULT_VALUE_MIN,
             CONF_VALUE_MAX: DEFAULT_VALUE_MAX,
             CONF_BACKLIGHT_COLOR: list(DEFAULT_BACKLIGHT_COLOR),
+            CONF_BACKLIGHT_LAST_COLOR: list(DEFAULT_BACKLIGHT_COLOR),
             CONF_UPDATE_MODE: DEFAULT_UPDATE_MODE,
             "dial_easing_period": 50,
             "dial_easing_step": 2,
@@ -120,11 +123,12 @@ class VU1DialConfigManager:
             validated[CONF_VALUE_MIN], validated[CONF_VALUE_MAX] = validated[CONF_VALUE_MAX], validated[CONF_VALUE_MIN]
 
         # RGBW backlight, 0-100 per channel
-        try:
-            color = [max(0, min(100, int(c))) for c in validated[CONF_BACKLIGHT_COLOR]]
-        except (ValueError, TypeError):
-            color = []
-        validated[CONF_BACKLIGHT_COLOR] = color if len(color) == 4 else defaults[CONF_BACKLIGHT_COLOR]
+        for key in COLOR_KEYS:
+            try:
+                color = [max(0, min(100, int(c))) for c in validated[key]]
+            except (ValueError, TypeError):
+                color = []
+            validated[key] = color if len(color) == 4 else defaults[key]
 
         if validated[CONF_UPDATE_MODE] not in (UPDATE_MODE_AUTOMATIC, UPDATE_MODE_MANUAL):
             validated[CONF_UPDATE_MODE] = defaults[CONF_UPDATE_MODE]

@@ -12,6 +12,8 @@ from homeassistant.components.light import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .const import CONF_BACKLIGHT_LAST_COLOR
+from .device_config import async_get_config_manager
 from .entity import VU1DialEntity, async_setup_dial_entities
 
 if TYPE_CHECKING:
@@ -73,9 +75,16 @@ class VU1BacklightLight(VU1DialEntity, LightEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Instruct the light to turn on."""
+        # While off, the colour and brightness default to the last ones that were on.
+        last = self._backlight()
+        if not any(last):
+            last = async_get_config_manager(self.hass).get_dial_config(self._dial_uid)[CONF_BACKLIGHT_LAST_COLOR]
+        peak = max(last)
         # The color is full-scale and brightness dims it, so the two never compound.
-        base = kwargs.get(ATTR_RGBW_COLOR) or self.rgbw_color or (255, 255, 255, 0)
-        brightness = kwargs.get(ATTR_BRIGHTNESS, self.brightness or 255)
+        base = kwargs.get(ATTR_RGBW_COLOR) or (
+            tuple(round(c / peak * 255) for c in last) if peak else (255, 255, 255, 0)
+        )
+        brightness = kwargs.get(ATTR_BRIGHTNESS, round(peak / 100 * 255) or 255)
 
         scale = brightness / 255
         # Scale the 0-255 base color and convert to the device 0-100 range.

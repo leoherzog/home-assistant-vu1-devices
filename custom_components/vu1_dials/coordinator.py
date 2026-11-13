@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BACKLIGHT_CHANNELS,
     CONF_BACKLIGHT_COLOR,
+    CONF_BACKLIGHT_LAST_COLOR,
     DATA_BINDING_MANAGER,
     DOMAIN,
 )
@@ -267,7 +268,11 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             white = config_manager.get_dial_config(dial_uid)[CONF_BACKLIGHT_COLOR][3]
         await self.client.set_dial_backlight(dial_uid, red, green, blue, white)
         color = [red, green, blue, white]
-        await config_manager.async_update_dial_config(dial_uid, {CONF_BACKLIGHT_COLOR: color})
+        # backlight_color stays all zero while off, or _async_restore_backlight would turn the light back on.
+        update = {CONF_BACKLIGHT_COLOR: color}
+        if any(color):
+            update[CONF_BACKLIGHT_LAST_COLOR] = color
+        await config_manager.async_update_dial_config(dial_uid, update)
         self._async_publish(dial_uid, backlight=dict(zip(BACKLIGHT_CHANNELS, color)))
 
     async def async_set_dial_value(self, dial_uid: str, value: int) -> None:
