@@ -14,6 +14,21 @@ from .device_config import async_get_config_manager
 TO_REDACT = {CONF_API_KEY, CONF_HOST}
 
 
+def _alias_dial_uids(value: Any, aliases: dict[str, str]) -> Any:
+    """Replace dial UIDs, which are hardware serials, in every key and string of a payload."""
+    if isinstance(value, dict):
+        return {
+            _alias_dial_uids(key, aliases): _alias_dial_uids(item, aliases)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_alias_dial_uids(item, aliases) for item in value]
+    if isinstance(value, str):
+        for uid, alias in aliases.items():
+            value = value.replace(uid, alias)
+    return value
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     entry: VU1ConfigEntry,
@@ -64,4 +79,6 @@ async def async_get_config_entry_diagnostics(
 
     diagnostics_data["sensor_bindings"] = runtime_data.binding_manager.async_get_bindings_summary()
 
-    return diagnostics_data
+    uids = [*diagnostics_data["dials"], *diagnostics_data["sensor_bindings"]]
+    aliases = {uid: f"dial_{number}" for number, uid in enumerate(dict.fromkeys(uids), 1)}
+    return _alias_dial_uids(diagnostics_data, aliases)

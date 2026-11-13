@@ -169,7 +169,7 @@ Adding a service: add `SERVICE_*`/`ATTR_*` to `const.py`; write a handler that c
 
 ## Diagnostics
 
-Keys: `config_entry` (`entry_id`, `domain`, redacted `title`, `data` and `options` with `api_key` and `host` redacted), `coordinator` (`last_update_success`, `update_interval`, `server_device_identifier`), `dials` (`dial_name`, `image_file` and `detailed_status` with `image_file` reduced to its basename), `dial_configs`, `sensor_bindings` (from `async_get_bindings_summary()`).
+Keys: `config_entry` (`entry_id`, `domain`, redacted `title`, `data` and `options` with `api_key` and `host` redacted), `coordinator` (`last_update_success`, `update_interval`, `server_device_identifier`), `dials` (`dial_name`, `image_file` and `detailed_status` with `image_file` reduced to its basename), `dial_configs`, `sensor_bindings` (from `async_get_bindings_summary()`). Dial UIDs are hardware serials, so `_alias_dial_uids` replaces each one with `dial_<n>` in every key and string, the same alias in every section.
 
 ## VU1 Server API
 
