@@ -15,7 +15,6 @@ from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import (
     EVENT_DEVICE_REGISTRY_UPDATED,
@@ -50,7 +49,11 @@ from .const import (
     SERVICE_SET_DIAL_NAME,
     SERVICE_SET_DIAL_VALUE,
 )
-from .coordinator import VU1DataUpdateCoordinator, _get_dial_client_and_coordinator
+from .coordinator import (
+    VU1DataUpdateCoordinator,
+    _get_dial_client_and_coordinator,
+    async_clear_issues,
+)
 from .device_config import STORAGE_KEY, STORAGE_VERSION, VU1DialConfigManager
 from .sensor_binding import VU1SensorBindingManager, async_switch_to_manual
 from .vu1_api import DEFAULT_TIMEOUT, VU1APIClient
@@ -184,10 +187,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
-        ir.async_delete_issue(hass, DOMAIN, "no_dials")
+        async_clear_issues(hass)
         runtime_data = entry.runtime_data
         coordinator = runtime_data.coordinator
-        coordinator.async_clear_issues()
         if coordinator.data:
             for dial_uid in list(coordinator.data.get("dials", {}).keys()):
                 await runtime_data.binding_manager.async_remove_binding(dial_uid)
@@ -196,7 +198,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> bool
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: VU1ConfigEntry) -> None:
-    """Discard persisted dial configuration when the entry is removed."""
+    """Discard persisted dial configuration and repair issues when the entry is removed."""
+    async_clear_issues(hass)
     if config_manager := hass.data.get(DATA_CONFIG_MANAGER):
         await config_manager.async_remove()
     else:

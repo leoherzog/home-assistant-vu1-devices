@@ -208,12 +208,6 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unresponsive_dials.discard(dial_uid)
         ir.async_delete_issue(self.hass, DOMAIN, f"dial_unresponsive_{dial_uid}")
 
-    @callback
-    def async_clear_issues(self) -> None:
-        """Close every per-dial repair issue this coordinator opened; call on unload."""
-        for dial_uid in list(self._unresponsive_dials):
-            self._delete_unresponsive_issue(dial_uid)
-
     def _sync_device_registry(
         self, dial_uid: str, dial: dict[str, Any], status: dict[str, Any]
     ) -> None:
@@ -411,6 +405,14 @@ class VU1DataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if config_changed:
             await config_manager.async_update_dial_config(dial_uid, server_values)
             _LOGGER.info("Synced behavior settings from server for %s", dial_uid)
+
+
+@callback
+def async_clear_issues(hass: HomeAssistant) -> None:
+    """Close every repair issue of this integration, which has a single config entry."""
+    for domain, issue_id in list(ir.async_get(hass).issues):
+        if domain == DOMAIN:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 def _get_dial_client_and_coordinator(hass: HomeAssistant, dial_uid: str) -> tuple[VU1APIClient, VU1DataUpdateCoordinator] | None:
