@@ -150,10 +150,10 @@
         "name": "Value range maximum"
       },
       "dial_easing_period": {
-        "name": "Dial easing period"
+        "name": "Needle easing period"
       },
       "dial_easing_step": {
-        "name": "Dial easing step"
+        "name": "Needle easing step"
       },
       "backlight_easing_period": {
         "name": "Backlight easing period"
@@ -190,7 +190,7 @@
     },
     "select": {
       "behavior_preset": {
-        "name": "Dial behavior",
+        "name": "Behavior",
         "state": {
           "responsive": "Responsive",
           "balanced": "Balanced",
@@ -221,7 +221,7 @@
       "value_min": "Minimum value",
       "value_max": "Maximum value",
       "backlight_color": "Backlight color",
-      "dial_easing": "Dial easing preset",
+      "dial_easing": "Needle easing preset",
       "backlight_easing": "Backlight easing preset",
       "update_mode": "Update mode"
     }

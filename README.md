@@ -64,9 +64,9 @@ Each dial is a device under the VU1 Server device. Example entity IDs assume a d
 | Image | Background image, e.g. `image.cpu_dial_background_image` | | Current dial face |
 | Sensor | Update mode | | Automatic or Manual |
 | Sensor | Bound entity | | Bound entity ID; unknown in manual mode |
-| Select | Dial behavior | Configuration | Responsive, Balanced or Smooth; unknown when the easing matches no preset |
+| Select | Behavior, e.g. `select.cpu_dial_behavior` | Configuration | Responsive, Balanced or Smooth; unknown when the easing matches no preset |
 | Number | Value range minimum / maximum | Configuration | Source values shown as 0% and 100% |
-| Number | Dial easing period / step | Configuration | Needle movement (ms / %), default 50 / 2 |
+| Number | Needle easing period / step, e.g. `number.cpu_dial_needle_easing_period` | Configuration | Needle movement (ms / %), default 50 / 2 |
 | Number | Backlight easing period / step | Configuration | Backlight transition (ms / %), default 100 / 5 |
 | Button | Identify | Diagnostic | Flashes the backlight white, then restores it |
 | Button | Refresh hardware info | Diagnostic | Re-reads firmware and hardware info from the dial |
