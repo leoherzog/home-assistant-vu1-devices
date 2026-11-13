@@ -3,7 +3,7 @@
 Home Assistant custom integration `vu1_dials` (hub, `local_polling`, config entries only) for Streacom VU1 eInk dials. It drives dials through the VU1 Server HTTP API. There is no hardware access from HA and no test suite in this repo.
 
 - `manifest.json`: `single_config_entry: true` (one VU1 Server per HA), `dependencies: ["file_upload", "media_source"]`. The minimum HA version (2026.8.0) is in `hacs.json`; `DeviceInfo(via_device_id=...)` and `async_get_device_by_identifier` set that floor.
-- Target HA 2026.9, Python 3.14.
+- Target HA 2026.11, Python 3.14.
 - `brand/icon.png` (256 px) and `brand/icon@2x.png` (512 px) are the brand images HA serves ahead of the brands CDN and the HACS action checks for. They and the app's 128 px `icon.png` are rendered from `assets/icon.svg`: `magick -background none -density 384 assets/icon.svg -resize 256x256 PNG32:custom_components/vu1_dials/brand/icon.png`, with 512 for `icon@2x.png`.
 
 ## Layout
@@ -199,7 +199,7 @@ Every `/dial/{uid}/...` endpoint returns 401 without a valid key and 403 when th
 - Keep changes small; prefer deleting code. No migration or compatibility code, no comments narrating a change, no try/except that only logs and re-raises.
 - Import and lint gate:
   ```
-  uv run --no-project --python 3.14 --with homeassistant==2026.9.2 python -c "import importlib,pkgutil,custom_components.vu1_dials as p;[importlib.import_module('custom_components.vu1_dials.'+m.name) for m in pkgutil.iter_modules(p.__path__)];print('import ok')" && uvx ruff@0.16.7 check custom_components/vu1_dials
+  uv run --no-project --python 3.14 --with homeassistant==2026.11.1 python -c "import importlib,pkgutil,custom_components.vu1_dials as p;[importlib.import_module('custom_components.vu1_dials.'+m.name) for m in pkgutil.iter_modules(p.__path__)];print('import ok')" && uvx ruff@0.16.7 check custom_components/vu1_dials
   ```
 - Line endings are mixed per file (`git ls-files --eol`); preserve them. CRLF: `__init__.py`, `button.py`, `config_flow.py`, `const.py`, `coordinator.py`, `diagnostics.py`, `image.py`, `light.py`, `select.py`, `sensor.py`, `vu1_api.py`, `services.yaml`, `strings.json`, `translations/en.json`, `hacs.json`, `README.md`. Everything else is LF.
 - Edit `strings.json` and `translations/en.json` together.
