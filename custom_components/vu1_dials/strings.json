@@ -139,6 +139,13 @@
         "automatic": "Automatic",
         "manual": "Manual"
       }
+    },
+    "easing_preset": {
+      "options": {
+        "responsive": "Responsive",
+        "balanced": "Balanced",
+        "smooth": "Smooth"
+      }
     }
   },
   "entity": {
@@ -349,6 +356,40 @@
     "reload_dial": {
       "name": "Reload dial",
       "description": "Reloads the hardware configuration and refreshes the information of a VU1 dial."
+    },
+    "configure_dial": {
+      "name": "Configure dial",
+      "description": "Changes the binding, value range, backlight color and easing of a VU1 dial. Only the fields you set are changed.",
+      "fields": {
+        "bound_entity": {
+          "name": "Bound entity",
+          "description": "The entity whose value drives the needle in automatic mode."
+        },
+        "value_min": {
+          "name": "Minimum value",
+          "description": "The source value shown as 0% on the dial. Must be less than the maximum."
+        },
+        "value_max": {
+          "name": "Maximum value",
+          "description": "The source value shown as 100% on the dial."
+        },
+        "backlight_color": {
+          "name": "Backlight color",
+          "description": "RGB color of the backlight. The current white level is kept."
+        },
+        "dial_easing": {
+          "name": "Needle easing preset",
+          "description": "How quickly the needle moves to a new value."
+        },
+        "backlight_easing": {
+          "name": "Backlight easing preset",
+          "description": "How quickly the backlight fades to a new color."
+        },
+        "update_mode": {
+          "name": "Update mode",
+          "description": "Automatic follows the bound entity. Manual is set from Home Assistant entities and actions."
+        }
+      }
     }
   }
 }

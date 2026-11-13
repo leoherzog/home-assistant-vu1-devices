@@ -43,6 +43,7 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     PLATFORMS,
+    SERVICE_CONFIGURE_DIAL,
     SERVICE_RELOAD_DIAL,
     SERVICE_SET_DIAL_BACKLIGHT,
     SERVICE_SET_DIAL_IMAGE,
@@ -53,6 +54,11 @@ from .coordinator import (
     VU1DataUpdateCoordinator,
     _get_dial_client_and_coordinator,
     async_clear_issues,
+)
+from .device_action import (
+    CONFIGURE_DIAL_FIELDS,
+    async_configure_dial,
+    merged_dial_config,
 )
 from .device_config import STORAGE_KEY, STORAGE_VERSION, VU1DialConfigManager
 from .sensor_binding import VU1SensorBindingManager, async_switch_to_manual
@@ -392,6 +398,17 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             lambda coordinator, uid: coordinator.client.reload_dial(uid),
         )
 
+    async def configure_dial(call: ServiceCall) -> None:
+        """Configure dial service."""
+        dial_uids = _resolve_dial_uids_from_call(hass, call)
+        # An invalid range on any dial rejects the call before any dial is changed.
+        for uid in dial_uids:
+            merged_dial_config(hass, uid, call.data)
+        await _execute_dial_service_for_all(
+            hass, dial_uids, "configure dial",
+            lambda coordinator, uid: async_configure_dial(hass, coordinator, uid, call.data),
+        )
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_DIAL_VALUE,
@@ -456,4 +473,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_RELOAD_DIAL,
         reload_dial,
         schema=vol.Schema(cv.TARGET_SERVICE_FIELDS),
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CONFIGURE_DIAL,
+        configure_dial,
+        schema=vol.Schema({**cv.TARGET_SERVICE_FIELDS, **CONFIGURE_DIAL_FIELDS}),
     )

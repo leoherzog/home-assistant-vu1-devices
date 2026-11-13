@@ -1,6 +1,7 @@
 """Device actions for VU1 dials."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -24,7 +25,7 @@ from .const import (
     UPDATE_MODE_AUTOMATIC,
     UPDATE_MODE_MANUAL,
 )
-from .coordinator import _get_dial_client_and_coordinator
+from .coordinator import VU1DataUpdateCoordinator, _get_dial_client_and_coordinator
 from .device_config import async_get_config_manager
 from .sensor_binding import BINDING_KEYS, async_get_binding_manager
 
@@ -43,10 +44,9 @@ _BINDABLE_ENTITY_SELECTOR = selector.EntitySelector(
 )
 
 
-# Optional configuration fields shared by the action schema and its capabilities.
-# No ``default=`` here on purpose: an action must only apply the keys the user
-# actually configured, otherwise unrelated dial settings get silently reset.
-_CONFIGURE_DIAL_FIELDS = {
+# Shared by the device action and the configure_dial service. No defaults: only
+# the keys the user set are applied.
+CONFIGURE_DIAL_FIELDS = {
     vol.Optional(CONF_BOUND_ENTITY): _BINDABLE_ENTITY_SELECTOR,
     vol.Optional(CONF_VALUE_MIN): vol.Coerce(float),
     vol.Optional(CONF_VALUE_MAX): vol.Coerce(float),
@@ -61,7 +61,7 @@ _CONFIGURE_DIAL_FIELDS = {
 ACTION_SCHEMA = cv.DEVICE_ACTION_BASE_SCHEMA.extend(
     {
         vol.Required(CONF_TYPE): ACTION_CONFIGURE_DIAL,
-        **_CONFIGURE_DIAL_FIELDS,
+        **CONFIGURE_DIAL_FIELDS,
     }
 )
 
@@ -89,37 +89,50 @@ async def async_call_action_from_config(
     context: Context | None,
 ) -> None:
     """Execute a device action."""
-    await _async_configure_dial(hass, config)
+    device_id = config[CONF_DEVICE_ID]
+    dial_uid = await _get_dial_uid_for_device(hass, device_id)
+    if not dial_uid:
+        raise HomeAssistantError(translation_domain=DOMAIN, translation_key="not_a_dial", translation_placeholders={"device_id": device_id})
+
+    result = _get_dial_client_and_coordinator(hass, dial_uid)
+    if not result:
+        raise HomeAssistantError(translation_domain=DOMAIN, translation_key="dial_not_found", translation_placeholders={"dial_uid": dial_uid})
+    await async_configure_dial(hass, result[1], dial_uid, config)
 
 
 async def async_get_action_capabilities(
     hass: HomeAssistant, config: ConfigType
 ) -> dict[str, Any]:
     """Get action capabilities."""
-    return {"extra_fields": vol.Schema(_CONFIGURE_DIAL_FIELDS)}
+    return {"extra_fields": vol.Schema(CONFIGURE_DIAL_FIELDS)}
 
 
-async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None:
-    """Configure a VU1 dial."""
-    device_id = config[CONF_DEVICE_ID]
-    dial_uid = await _get_dial_uid_for_device(hass, device_id)
-    
-    if not dial_uid:
-        raise HomeAssistantError(translation_domain=DOMAIN, translation_key="not_a_dial", translation_placeholders={"device_id": device_id})
-    
-    result = _get_dial_client_and_coordinator(hass, dial_uid)
-    if not result:
-        raise HomeAssistantError(translation_domain=DOMAIN, translation_key="dial_not_found", translation_placeholders={"dial_uid": dial_uid})
-    client, coordinator = result
+def merged_dial_config(
+    hass: HomeAssistant, dial_uid: str, config: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return the stored dial config with the binding fields of ``config`` applied.
 
-    config_manager = async_get_config_manager(hass)
-    # The backlight is persisted by async_set_backlight
+    Raises ``value_min_not_less_than_max`` when the merged range is empty or inverted.
+    """
     dial_config = {
-        **config_manager.get_dial_config(dial_uid),
+        **async_get_config_manager(hass).get_dial_config(dial_uid),
         **{key: config[key] for key in BINDING_KEYS if key in config},
     }
     if dial_config[CONF_VALUE_MIN] >= dial_config[CONF_VALUE_MAX]:
         raise ServiceValidationError(translation_domain=DOMAIN, translation_key="value_min_not_less_than_max")
+    return dial_config
+
+
+async def async_configure_dial(
+    hass: HomeAssistant,
+    coordinator: VU1DataUpdateCoordinator,
+    dial_uid: str,
+    config: Mapping[str, Any],
+) -> None:
+    """Apply the ``CONFIGURE_DIAL_FIELDS`` present in ``config`` to a dial."""
+    client = coordinator.client
+    # The backlight is persisted by async_set_backlight
+    dial_config = merged_dial_config(hass, dial_uid, config)
 
     easing = [
         (f"{kind}_easing_period", f"{kind}_easing_step", BEHAVIOR_PRESETS[config[key]], setter)
@@ -135,7 +148,7 @@ async def _async_configure_dial(hass: HomeAssistant, config: ConfigType) -> None
 
     if easing:
         coordinator.mark_behavior_change_from_ha(dial_uid)
-    await config_manager.async_update_dial_config(dial_uid, dial_config)
+    await async_get_config_manager(hass).async_update_dial_config(dial_uid, dial_config)
 
     if any(key in config for key in BINDING_KEYS):
         await async_get_binding_manager(hass).async_reconfigure_dial_binding(dial_uid)

@@ -42,6 +42,7 @@ SERVICE_SET_DIAL_BACKLIGHT = "set_dial_backlight"
 SERVICE_SET_DIAL_NAME = "set_dial_name"
 SERVICE_SET_DIAL_IMAGE = "set_dial_image"
 SERVICE_RELOAD_DIAL = "reload_dial"
+SERVICE_CONFIGURE_DIAL = "configure_dial"
 
 # Attributes
 ATTR_VALUE = "value"

@@ -107,18 +107,25 @@ Every action takes a target: dial entities, dial devices, areas, floors or label
 | `vu1_dials.set_dial_name` | `name` | yes | 3-30 characters: letters, digits, space, `-` and `_`. Exactly one dial may be targeted. |
 | `vu1_dials.set_dial_image` | `media_content_id` | yes | A local media library image: PNG or JPEG up to 2 MB, converted to greyscale and fitted to 200x144 |
 | `vu1_dials.reload_dial` | | | No fields. Re-reads hardware info, like the Refresh hardware info button. |
+| `vu1_dials.configure_dial` | see below | no | Changes binding, range, backlight colour and easing |
 
-### Device action: Configure dial
+Any entity of a dial works as a target, so `entity_id: light.cpu_dial_backlight` targets the whole dial. Prefer entity IDs over device IDs, which change when a device is re-added.
 
-In the automation editor, a dial device offers **Configure dial**. Every field is optional and only the fields you set are changed:
+Common tasks need no `vu1_dials` action: `number.set_value` on the dial's number sets the needle, or a range or easing value on a configuration number; `light.turn_on` and `light.turn_off` control the backlight; `select.select_option` picks a behavior preset.
+
+### Configure dial
+
+`vu1_dials.configure_dial` is the automation route to the binding and update mode. Every field is optional and only the fields you set are changed:
 
 | Field | Description |
 |-------|-------------|
-| `bound_entity` | Entity to bind |
+| `bound_entity` | Entity to bind: a sensor, input_number, number or counter |
 | `value_min`, `value_max` | Range mapped to 0-100%; the minimum must be less than the maximum |
 | `backlight_color` | RGB colour, 0-255 per channel; the white level is kept |
-| `dial_easing`, `backlight_easing` | `responsive`, `balanced` or `smooth` |
+| `dial_easing`, `backlight_easing` | Needle and backlight easing: `responsive`, `balanced` or `smooth` |
 | `update_mode` | `automatic` or `manual` |
+
+When several dials are targeted, a range that would be invalid on any of them rejects the call before any dial is changed. In the automation editor, a dial device also offers a **Configure dial** device action with the same fields.
 
 ### Examples
 
@@ -139,7 +146,7 @@ actions:
 
   - action: vu1_dials.set_dial_backlight
     target:
-      device_id: 0123456789abcdef0123456789abcdef
+      entity_id: light.cpu_dial_backlight
     data:
       red: 100
       green: 50
@@ -151,13 +158,20 @@ actions:
     data:
       media_content_id: "media-source://media_source/local/dial_backgrounds/cpu.png"
 
-  - device_id: 0123456789abcdef0123456789abcdef
-    domain: vu1_dials
-    type: configure_dial
-    bound_entity: sensor.cpu_temperature
-    value_min: 30
-    value_max: 90
-    update_mode: automatic
+  - action: select.select_option
+    target:
+      entity_id: select.cpu_dial_behavior
+    data:
+      option: smooth
+
+  - action: vu1_dials.configure_dial
+    target:
+      entity_id: number.cpu_dial
+    data:
+      bound_entity: sensor.cpu_temperature
+      value_min: 30
+      value_max: 90
+      update_mode: automatic
 ```
 
 ## Data updates

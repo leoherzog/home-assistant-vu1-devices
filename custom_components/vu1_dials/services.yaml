@@ -77,3 +77,67 @@ reload_dial:
   target:
     entity:
       integration: vu1_dials
+
+configure_dial:
+  target:
+    entity:
+      integration: vu1_dials
+  fields:
+    bound_entity:
+      required: false
+      example: sensor.cpu_temperature
+      selector:
+        entity:
+          domain:
+            - sensor
+            - input_number
+            - number
+            - counter
+    value_min:
+      required: false
+      example: 30
+      selector:
+        number:
+          mode: box
+          step: any
+    value_max:
+      required: false
+      example: 90
+      selector:
+        number:
+          mode: box
+          step: any
+    backlight_color:
+      required: false
+      example: "[255, 128, 0]"
+      selector:
+        color_rgb:
+    dial_easing:
+      required: false
+      example: smooth
+      selector:
+        select:
+          translation_key: easing_preset
+          options:
+            - responsive
+            - balanced
+            - smooth
+    backlight_easing:
+      required: false
+      example: smooth
+      selector:
+        select:
+          translation_key: easing_preset
+          options:
+            - responsive
+            - balanced
+            - smooth
+    update_mode:
+      required: false
+      example: automatic
+      selector:
+        select:
+          translation_key: update_mode
+          options:
+            - automatic
+            - manual

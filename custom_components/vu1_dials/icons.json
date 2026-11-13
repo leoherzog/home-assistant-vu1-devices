@@ -79,6 +79,9 @@
     },
     "reload_dial": {
       "service": "mdi:refresh"
+    },
+    "configure_dial": {
+      "service": "mdi:tune"
     }
   }
 }

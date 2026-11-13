@@ -19,7 +19,7 @@ custom_components/vu1_dials/
 ├── sensor_binding.py    # VU1SensorBindingManager (entity -> dial value)
 ├── config_entities.py   # VU1ConfigEntityBase, config numbers, update-mode and bound-entity sensors
 ├── number.py light.py select.py sensor.py button.py image.py
-├── device_action.py     # "Configure dial" device action
+├── device_action.py     # "Configure dial" device action and the helper it shares with the service
 ├── diagnostics.py
 ├── const.py             # Keys, service/attr names, HassKeys, BEHAVIOR_PRESETS
 ├── services.yaml strings.json translations/en.json icons.json manifest.json
@@ -145,16 +145,17 @@ Registered once in `async_setup`. Each schema is `vol.Schema({**cv.TARGET_SERVIC
 | `set_dial_name` | `name`; single target only (`single_dial_only`); updates the HA device name unless the device was renamed in HA |
 | `set_dial_image` | `media_content_id` (media selector dict or URI string); must resolve to a local file |
 | `reload_dial` | none |
+| `configure_dial` | the optional `CONFIGURE_DIAL_FIELDS` of `device_action.py`; every targeted dial's merged range is checked before any dial is changed, so `value_min_not_less_than_max` is raised unwrapped |
 
 `_execute_dial_service_for_all(hass, uids, action_name, api_call)` runs `api_call(coordinator, uid)` for every dial concurrently, refreshes the coordinator once if any call succeeded, and raises one `action_failed` error listing failures (`ServiceValidationError` if every failure was one).
 
 Adding a service: add `SERVICE_*`/`ATTR_*` to `const.py`; write a handler that calls `_resolve_dial_uids_from_call(hass, call)` and `_execute_dial_service_for_all(hass, uids, "my action", lambda coordinator, uid: coordinator.client.my_call(uid, ...))`; register it with `vol.Schema({**cv.TARGET_SERVICE_FIELDS, vol.Required(ATTR_MY_PARAM): ...})`; add its target/fields/selectors to `services.yaml`, its name/description/field names to the `services` block of `strings.json` and `translations/en.json`, and it to the `services` block of `icons.json`.
 
-## Device action (`device_action.py`)
+## Configure dial (`device_action.py`)
 
-`configure_dial`, offered for dial devices. Optional fields: `bound_entity`, `value_min`, `value_max` (merged with the stored config; `value_min_not_less_than_max` when min >= max), `backlight_color` (RGB 0-255 selector, sent through `async_set_backlight` keeping the stored white), `dial_easing` and `backlight_easing` (preset slugs from `BEHAVIOR_PRESETS`), `update_mode`. Only fields present are applied.
+The `configure_dial` device action, offered for dial devices, and the `configure_dial` service share `CONFIGURE_DIAL_FIELDS` and `async_configure_dial(hass, coordinator, uid, config)`. Optional fields: `bound_entity`, `value_min`, `value_max` (merged with the stored config by `merged_dial_config`; `value_min_not_less_than_max` when min >= max), `backlight_color` (RGB 0-255 selector, sent through `async_set_backlight` keeping the stored white), `dial_easing` and `backlight_easing` (preset slugs from `BEHAVIOR_PRESETS`), `update_mode`. Only fields present are applied. A change to any of `BINDING_KEYS` calls `async_reconfigure_dial_binding`.
 
-`BEHAVIOR_PRESETS` in `const.py` is the one source for presets (select and device action): each has the four easing values and a `description`.
+`BEHAVIOR_PRESETS` in `const.py` is the one source for presets (select, device action and service): each has the four easing values and a `description`.
 
 ## Config flow (`config_flow.py`)
 
