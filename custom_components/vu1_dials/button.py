@@ -123,9 +123,13 @@ class VU1IdentifyDialButton(VU1DialEntity, ButtonEntity):
         super().__init__(coordinator, dial_uid)
         self._attr_unique_id = f"{dial_uid}_identify"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._flash: asyncio.Task[None] | None = None
 
     async def async_press(self) -> None:
         """Flash the backlight white for a second, then restore it."""
+        # During a flash the live colour is the white, which must not become the colour to restore.
+        if self._flash and not self._flash.done():
+            return
         original = self._backlight()
         await self.coordinator.client.set_dial_backlight(self._dial_uid, 100, 100, 100, 0)
 
@@ -138,6 +142,6 @@ class VU1IdentifyDialButton(VU1DialEntity, ButtonEntity):
             except HomeAssistantError as err:
                 _LOGGER.warning("Failed to restore backlight for dial %s: %s", self._dial_uid, err)
 
-        self.coordinator.config_entry.async_create_background_task(
+        self._flash = self.coordinator.config_entry.async_create_background_task(
             self.hass, _finish_identify(), name=f"vu1_identify_{self._dial_uid}"
         )
