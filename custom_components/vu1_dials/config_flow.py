@@ -120,8 +120,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             updated_data = {**entry.data, **{k: v for k, v in user_input.items() if v}}
             errors = await validate_input(self.hass, updated_data)
             if not errors:
+                title = entry.title
+                address = (updated_data[CONF_HOST], updated_data[CONF_PORT])
+                if address != (host, port):
+                    addon = await discover_vu1_addon(async_get_clientsession(self.hass))
+                    if addon and address == (addon["host"], addon["port"]):
+                        title = "VU1 Server (App)"
+                    else:
+                        title = f"VU1 Server ({address[0]}:{address[1]})"
                 return self.async_update_reload_and_abort(
                     entry,
+                    title=title,
                     data_updates=updated_data,
                 )
             host, port = user_input[CONF_HOST], user_input[CONF_PORT]

@@ -161,7 +161,7 @@ Adding a service: add `SERVICE_*`/`ATTR_*` to `const.py`; write a handler that c
 - `user`: runs `discover_vu1_addon`; shows a menu (`addon`, `manual`) when found, otherwise goes to `manual`.
 - `addon`: aborts `addon_not_running` if the app is stopped; asks only for the key.
 - `manual`: host, port, key.
-- `reconfigure`: host, port, optional key (empty keeps the current one).
+- `reconfigure`: host, port, optional key (empty keeps the current one). When host or port changes, the title is rebuilt as `VU1 Server (App)` if they match the discovered app, else `VU1 Server (host:port)`; otherwise it is kept.
 - `reauth` / `reauth_confirm`: new key.
 - `validate_input` calls `get_dial_list()` and returns `invalid_auth`, `cannot_connect` or `unknown`; a server with no dials is accepted so the provision button stays reachable (the `no_dials` repair issue explains it).
 
