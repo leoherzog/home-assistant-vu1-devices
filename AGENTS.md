@@ -4,7 +4,7 @@ Home Assistant custom integration `vu1_dials` (hub, `local_polling`, config entr
 
 - `manifest.json`: `single_config_entry: true` (one VU1 Server per HA), `dependencies: ["file_upload", "media_source"]`. The minimum HA version (2026.8.0) is in `hacs.json`; `DeviceInfo(via_device_id=...)` and `async_get_device_by_identifier` set that floor.
 - Target HA 2026.9, Python 3.14.
-- `icon.png` and `icon-full.png` are kept for reference only. HA does not read them; brand images come from home-assistant/brands.
+- `brand/icon.png` (256 px) and `brand/icon@2x.png` (512 px) are the brand images HA serves ahead of the brands CDN and the HACS action checks for. They and the app's 128 px `icon.png` are rendered from `assets/icon.svg`: `magick -background none -density 384 assets/icon.svg -resize 256x256 PNG32:custom_components/vu1_dials/brand/icon.png`, with 512 for `icon@2x.png`.
 
 ## Layout
 
@@ -23,6 +23,7 @@ custom_components/vu1_dials/
 ├── diagnostics.py
 ├── const.py             # Keys, service/attr names, HassKeys, BEHAVIOR_PRESETS
 ├── services.yaml strings.json translations/en.json icons.json manifest.json
+├── brand/               # icon.png, icon@2x.png
 ```
 
 `strings.json` and `translations/en.json` are kept byte-identical. Entity names, exception and issue texts and selector states are translated; service names, descriptions and field names live in the `services` block; `services.yaml` holds only targets, fields and selectors; icons live in `icons.json`.

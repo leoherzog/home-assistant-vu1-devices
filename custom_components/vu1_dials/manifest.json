@@ -1,6 +1,7 @@
 {
   "domain": "vu1_dials",
   "name": "Streacom VU1 Dials",
+  "categories": ["computers_network.monitoring"],
   "codeowners": ["@leoherzog"],
   "config_flow": true,
   "dependencies": ["file_upload", "media_source"],
