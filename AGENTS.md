@@ -29,7 +29,7 @@ custom_components/vu1_dials/
 
 ## Lifecycle (`__init__.py`)
 
-- `async_setup`: loads `VU1DialConfigManager` into `hass.data[DATA_CONFIG_MANAGER]`, creates `VU1SensorBindingManager` in `hass.data[DATA_BINDING_MANAGER]`, registers services. Managers and services live for the whole HA session and survive entry reloads.
+- `async_setup`: loads `VU1DialConfigManager` into `hass.data[DATA_CONFIG_MANAGER]`, creates `VU1SensorBindingManager` in `hass.data[DATA_BINDING_MANAGER]`, registers services. Managers and services live for the whole HA session and survive entry reloads; the binding manager's entity-registry listener is released when HA stops.
 - `async_setup_entry`: builds the client (HA's shared aiohttp session, `timeout` option) and coordinator (`update_interval` option), creates the hub device `(DOMAIN, "vu1_server_{entry_id}")` and stores its id as `coordinator.hub_device_id`, runs the first refresh, sets `entry.runtime_data = VU1RuntimeData(client, coordinator, binding_manager)`, listens for device-registry `name_by_user` changes, forwards platforms, applies bindings.
 - `async_unload_entry`: unloads platforms and removes bindings for the entry's dials.
 - `async_remove_entry`: clears and deletes the dial-config store.
@@ -121,7 +121,7 @@ All dial entities subclass `VU1DialEntity` (`entity.py`): `_attr_has_entity_name
 }
 ```
 
-API: `get_dial_config(uid)` (a copy, defaults when unknown), `async_update_dial_config(uid, partial)` (merge, validate, schedule save, await listeners), `async_remove_dial_config(uid)`, `async_add_listener(uid, async_cb)` / `async_remove_listener`. Access it with `async_get_config_manager(hass)`.
+API: `get_dial_config(uid)` (a copy, defaults when unknown), `async_update_dial_config(uid, partial)` (merge, validate, schedule save, await listeners), `async_remove_dial_config(uid)`, `async_get_dials_bound_to(entity_id)`, `async_add_listener(uid, async_cb)` / `async_remove_listener`. Access it with `async_get_config_manager(hass)`.
 
 ## Entity binding (`sensor_binding.py`)
 
@@ -130,6 +130,8 @@ API: `get_dial_config(uid)` (a copy, defaults when unknown), `async_update_dial_
 - Parsing: the state must fully match a number with an optional trailing non-digit unit (`"23.5 °C"`); anything else is ignored.
 - Mapping: linear to 0-100, clamped at the range ends, rounded; returns 50 when min == max. A mapped value is not sent when it equals the dial's `detailed_status` value and neither `value_changed` nor `value_unresponsive` is set; otherwise it is sent and written into coordinator data with both flags cleared.
 - Reconcile: `async_update_bindings` runs on every poll with the freshly polled status and sends each active binding's mapped source value only when it differs from the status value, so a server restart, provisioning reset or outside change is corrected on the next poll. It ignores the flags because re-sending a pending or unresponsive value resets the server's retry backoff and unresponsive latch. A bound value of 0 is not restored after provisioning, which the server reports as a delivered 0.
+- Outage: while `coordinator.last_update_success` is false, state changes and reconfigures send nothing; the first good poll's reconcile catches up. The reconcile itself must not check that flag, because it runs inside the poll before the coordinator sets it true. A failed send is logged once per dial until a send succeeds or the value matches again.
+- Registry: one session-wide `EVENT_ENTITY_REGISTRY_UPDATED` listener. A renamed entity rewrites `bound_entity` for every dial that stores the old id, manual dials included, and reconfigures the binding. A removed bound entity logs one warning and the dial keeps its last value.
 - After changing binding config call `async_reconfigure_dial_binding(uid)`.
 
 ## Services (`__init__.py`)

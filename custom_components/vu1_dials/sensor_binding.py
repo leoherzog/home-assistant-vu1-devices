@@ -6,7 +6,8 @@ import logging
 import re
 from typing import Any
 
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import async_track_state_change_event
@@ -53,6 +54,44 @@ class VU1SensorBindingManager:
         # Debounce API calls to prevent rapid updates: dial_uid -> debouncer
         self._debouncers: dict[str, Debouncer] = {}
         self._missing_entities: set[str] = set()
+        # Dials whose last send failed, so the failure is logged once
+        self._failed_dials: set[str] = set()
+        self._unsub_registry = hass.bus.async_listen(
+            er.EVENT_ENTITY_REGISTRY_UPDATED, self._async_entity_registry_updated
+        )
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._async_stop)
+
+    @callback
+    def _async_stop(self, event: Event) -> None:
+        """Release the entity registry listener when Home Assistant stops."""
+        self._unsub_registry()
+
+    @callback
+    def _async_entity_registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        """Follow a renamed bound entity and warn once about a removed one."""
+        data = event.data
+        if data["action"] == "update" and "old_entity_id" in data:
+            self.hass.async_create_task(
+                self._async_rebind_renamed_entity(data["old_entity_id"], data["entity_id"])
+            )
+        elif (
+            data["action"] == "remove"
+            and data["entity_id"] not in self._missing_entities
+            and (dial_uids := self._config_manager.async_get_dials_bound_to(data["entity_id"]))
+        ):
+            self._missing_entities.add(data["entity_id"])
+            _LOGGER.warning(
+                "Bound entity %s was removed; dial %s keeps its last value",
+                data["entity_id"], ", ".join(dial_uids),
+            )
+
+    async def _async_rebind_renamed_entity(self, old_entity_id: str, new_entity_id: str) -> None:
+        """Point every dial bound to a renamed entity at its new entity_id."""
+        for dial_uid in self._config_manager.async_get_dials_bound_to(old_entity_id):
+            await self._config_manager.async_update_dial_config(
+                dial_uid, {CONF_BOUND_ENTITY: new_entity_id}
+            )
+            await self.async_reconfigure_dial_binding(dial_uid)
 
     async def async_update_bindings(self, coordinator_data: dict[str, Any]) -> None:
         """Update bindings from freshly polled data and re-send any bound value the dial does not show."""
@@ -184,6 +223,7 @@ class VU1SensorBindingManager:
 
         # Remove binding
         del self._bindings[dial_uid]
+        self._failed_dials.discard(dial_uid)
         _LOGGER.info("Removed sensor binding for dial %s", dial_uid)
 
     @callback
@@ -230,6 +270,10 @@ class VU1SensorBindingManager:
             _LOGGER.warning("No client available for dial %s, skipping sensor update", dial_uid)
             return
         client, coordinator = result
+        # During a server outage only the poll's reconcile sends; it runs before
+        # last_update_success turns true again, so it must not be skipped here.
+        if status is None and not coordinator.last_update_success:
+            return
 
         try:
             # Parse numeric value from sensor state
@@ -245,9 +289,11 @@ class VU1SensorBindingManager:
             if status.get("value") == dial_value and (
                 reconcile or not (status.get("value_changed") or status.get("value_unresponsive"))
             ):
+                self._failed_dials.discard(dial_uid)
                 return
 
             await client.set_dial_value(dial_uid, dial_value)
+            self._failed_dials.discard(dial_uid)
             # The server now holds the value, so later sends of it are skipped until the next poll.
             status.update(value=dial_value, value_changed=False, value_unresponsive=False)
             # A reconcile runs inside the poll, which publishes the new data itself.
@@ -260,7 +306,9 @@ class VU1SensorBindingManager:
             )
 
         except VU1APIError as err:
-            _LOGGER.error("Failed to update dial %s from sensor: %s", dial_uid, err)
+            if dial_uid not in self._failed_dials:
+                self._failed_dials.add(dial_uid)
+                _LOGGER.warning("Failed to update dial %s from sensor: %s", dial_uid, err)
         except Exception:
             _LOGGER.exception("Unexpected error updating dial %s from sensor", dial_uid)
 

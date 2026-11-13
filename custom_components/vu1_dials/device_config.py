@@ -61,6 +61,15 @@ class VU1DialConfigManager:
         """Coalesce writes to storage."""
         self._store.async_delay_save(lambda: {"dial_configs": self._configs}, SAVE_DELAY)
 
+    @callback
+    def async_get_dials_bound_to(self, entity_id: str) -> list[str]:
+        """Return the dials whose stored config names an entity as their bound entity."""
+        return [
+            dial_uid
+            for dial_uid, config in self._configs.items()
+            if config[CONF_BOUND_ENTITY] == entity_id
+        ]
+
     def get_dial_config(self, dial_uid: str) -> dict[str, Any]:
         """Get a copy of the configuration for a dial."""
         config = self._configs.get(dial_uid) or self._get_default_config()
